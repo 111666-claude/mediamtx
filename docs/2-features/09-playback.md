@@ -36,6 +36,64 @@ The server will return a list of timespans in JSON format:
 ]
 ```
 
+The server provides an endpoint that reports which parts of a time range are
+actually covered by recordings, and which parts are gaps:
+
+```
+http://localhost:9996/coverage?path=[mypath]&start=[start]&end=[end]
+```
+
+Where:
+
+- [mypath] is the name of a path
+- [start] is the start date in [RFC3339 format](https://www.utctime.net/)
+- [end] is the end date in [RFC3339 format](https://www.utctime.net/) and must be after [start]
+
+The endpoint reads the duration stored in the header of every segment, without
+reading its media payload, so the end of a recording can extend past the start
+of the next one, cross midnight and cross day-based folders of the recording
+path template. Consecutive and overlapping segments are merged into a single
+interval, and each interval lists the segments it is made of.
+
+```json
+{
+  "start": "2024-03-10T23:50:00Z07:00",
+  "end": "2024-03-11T00:20:00Z07:00",
+  "intervals": [
+    {
+      "start": "2024-03-10T23:55:00Z07:00",
+      "end": "2024-03-11T00:05:00Z07:00",
+      "segments": [
+        {
+          "path": "/recordings/mypath/2024-03-10/2024-03-10_23-55-00-000000.mp4",
+          "start": "2024-03-10T23:55:00Z07:00",
+          "end": "2024-03-11T00:05:00Z07:00"
+        }
+      ]
+    }
+  ],
+  "gaps": [
+    {
+      "start": "2024-03-10T23:50:00Z07:00",
+      "end": "2024-03-10T23:55:00Z07:00"
+    },
+    {
+      "start": "2024-03-11T00:05:00Z07:00",
+      "end": "2024-03-11T00:20:00Z07:00"
+    }
+  ],
+  "skipped": []
+}
+```
+
+Segments that disappeared while the query was running, whose header is damaged,
+or whose duration is zero, do not contribute to coverage: they are listed in
+`skipped` together with the reason, and their time span appears as a gap.
+
+The endpoint supports the fMP4 record format, since it is the only one that
+stores a duration inside segment headers. Requests that exceed the maximum
+number of segments (100000) are rejected with status `413`.
+
 The server provides an endpoint to download recordings:
 
 ```

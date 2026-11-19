@@ -2,6 +2,7 @@ package recordstore
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,11 @@ import (
 	amp4 "github.com/abema/go-mp4"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4"
 )
+
+// ErrSegmentEmpty is returned when a segment has a valid header but does not
+// contain any media part, which is the case of a recording that was started and
+// closed before receiving a single sample.
+var ErrSegmentEmpty = errors.New("recording segment does not contain any media part")
 
 func durationMp4ToGo(v int64, timeScale uint32) time.Duration {
 	timeScale64 := int64(timeScale)
@@ -42,6 +48,9 @@ func SegmentFMP4ReadHeader(r io.ReadSeeker) (*fmp4.Init, time.Duration, error) {
 	}
 
 	ftypSize := uint32(buf[0])<<24 | uint32(buf[1])<<16 | uint32(buf[2])<<8 | uint32(buf[3])
+	if ftypSize < 8 {
+		return nil, 0, fmt.Errorf("invalid ftyp box size: %d", ftypSize)
+	}
 
 	_, err = r.Seek(int64(ftypSize), io.SeekStart)
 	if err != nil {
@@ -60,23 +69,90 @@ func SegmentFMP4ReadHeader(r io.ReadSeeker) (*fmp4.Init, time.Duration, error) {
 	}
 
 	moovSize := uint32(buf[0])<<24 | uint32(buf[1])<<16 | uint32(buf[2])<<8 | uint32(buf[3])
+	if moovSize < 8 {
+		return nil, 0, fmt.Errorf("invalid moov box size: %d", moovSize)
+	}
 
-	// skip moov header
-
-	_, err = r.Seek(8, io.SeekCurrent)
+	// a corrupted size must not trigger a huge allocation.
+	fileSize, err := r.Seek(0, io.SeekEnd)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	// read mvhd
+	if int64(ftypSize)+int64(moovSize) > fileSize {
+		return nil, 0, fmt.Errorf("moov box exceeds segment size: %d > %d",
+			int64(ftypSize)+int64(moovSize), fileSize)
+	}
+
+	// find the mvhd box among the moov children
+
+	mvhdPos := int64(-1)
+	mvhdSize := uint32(0)
+	moovEnd := int64(ftypSize) + int64(moovSize)
+
+	_, err = r.Seek(int64(ftypSize)+8, io.SeekStart)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	for {
+		pos, err2 := r.Seek(0, io.SeekCurrent)
+		if err2 != nil {
+			return nil, 0, err2
+		}
+
+		if pos+8 > moovEnd {
+			break
+		}
+
+		_, err = io.ReadFull(r, buf)
+		if err != nil {
+			return nil, 0, err
+		}
+
+		size := uint32(buf[0])<<24 | uint32(buf[1])<<16 | uint32(buf[2])<<8 | uint32(buf[3])
+		if size < 8 {
+			return nil, 0, fmt.Errorf("invalid box size: %d", size)
+		}
+
+		if bytes.Equal(buf[4:], []byte{'m', 'v', 'h', 'd'}) {
+			mvhdPos = pos
+			mvhdSize = size
+			break
+		}
+
+		_, err = r.Seek(int64(size)-8, io.SeekCurrent)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+
+	if mvhdPos < 0 {
+		return nil, 0, fmt.Errorf("mvhd box not found")
+	}
+
+	if mvhdPos+int64(mvhdSize) > moovEnd {
+		return nil, 0, fmt.Errorf("mvhd box exceeds moov box")
+	}
+
+	// read the mvhd payload
 
 	var mvhd amp4.Mvhd
-	_, err = amp4.Unmarshal(r, uint64(moovSize-8), &mvhd, amp4.Context{})
+	_, err = r.Seek(mvhdPos+8, io.SeekStart)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	d := time.Duration(mvhd.DurationV0) * time.Second / time.Duration(mvhd.Timescale)
+	_, err = amp4.Unmarshal(r, uint64(mvhdSize-8), &mvhd, amp4.Context{})
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if mvhd.Timescale == 0 {
+		return nil, 0, fmt.Errorf("invalid mvhd timescale: 0")
+	}
+
+	d := time.Duration(mvhd.GetDuration()) * time.Second / time.Duration(mvhd.Timescale)
 
 	// read ftyp and moov
 
@@ -171,6 +247,15 @@ func segmentFMP4ReadDurationFromParts(
 
 		moofSize := uint32(buf[0])<<24 | uint32(buf[1])<<16 | uint32(buf[2])<<8 | uint32(buf[3])
 
+		// a box smaller than its own header, or a box with an extended size,
+		// would move the read position backwards or leave it unchanged.
+		if moofSize < 8 {
+			if lastMoofPos < 0 {
+				return 0, fmt.Errorf("invalid moof box size: %d", moofSize)
+			}
+			break
+		}
+
 		_, err = r.Seek(int64(moofSize)-8, io.SeekCurrent)
 		if err != nil {
 			break
@@ -187,6 +272,13 @@ func segmentFMP4ReadDurationFromParts(
 
 		mdatSize := uint32(buf[0])<<24 | uint32(buf[1])<<16 | uint32(buf[2])<<8 | uint32(buf[3])
 
+		if mdatSize < 8 {
+			if lastMoofPos < 0 {
+				return 0, fmt.Errorf("invalid mdat box size: %d", mdatSize)
+			}
+			break
+		}
+
 		_, err = r.Seek(int64(mdatSize)-8, io.SeekCurrent)
 		if err != nil {
 			break
@@ -196,7 +288,7 @@ func segmentFMP4ReadDurationFromParts(
 	}
 
 	if lastMoofPos < 0 {
-		return 0, fmt.Errorf("no moof boxes found")
+		return 0, ErrSegmentEmpty
 	}
 
 	// open last moof

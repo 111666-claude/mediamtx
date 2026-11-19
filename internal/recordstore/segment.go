@@ -120,17 +120,18 @@ func FindAllPathsWithSegments(pathConfs map[string]*conf.Path) []string {
 	return out
 }
 
-// FindSegments returns all segments of a path.
-// Segments can be filtered by start date and end date.
-func FindSegments(
+// findSegmentsInDir returns all segments of a path that start before end.
+// A nil end means no upper bound. When maxSegments is positive, the scan stops
+// with errTooManySegments as soon as that many segments are found.
+func findSegmentsInDir(
 	pathConf *conf.Path,
 	pathName string,
-	start *time.Time,
 	end *time.Time,
-) ([]*Segment, error) {
+	maxSegments int,
+) ([]*Segment, string, error) {
 	// double protection against directory traversal attacks
 	if err := conf.IsValidPathName(pathName); err != nil {
-		return nil, fmt.Errorf("invalid path name: %w (%s)", err, pathName)
+		return nil, "", fmt.Errorf("invalid path name: %w (%s)", err, pathName)
 	}
 
 	recordPath := PathAddExtension(
@@ -150,21 +151,45 @@ func FindSegments(
 			return err
 		}
 
-		if !info.IsDir() {
-			var pa Path
-			ok := pa.Decode(recordPath, fpath)
-
-			// gather all segments that start before the end of the playback
-			if ok && (end == nil || !end.Before(pa.Start)) {
-				segments = append(segments, &Segment{
-					Fpath: fpath,
-					Start: pa.Start,
-				})
-			}
+		if info.IsDir() {
+			return nil
 		}
+
+		var pa Path
+		ok := pa.Decode(recordPath, fpath)
+
+		// gather all segments that start before the end of the playback
+		if !ok || (end != nil && end.Before(pa.Start)) {
+			return nil
+		}
+
+		if maxSegments > 0 && len(segments) >= maxSegments {
+			return errTooManySegments
+		}
+
+		segments = append(segments, &Segment{
+			Fpath: fpath,
+			Start: pa.Start,
+		})
 
 		return nil
 	})
+	if err != nil {
+		return nil, commonPath, err
+	}
+
+	return segments, commonPath, nil
+}
+
+// FindSegments returns all segments of a path.
+// Segments can be filtered by start date and end date.
+func FindSegments(
+	pathConf *conf.Path,
+	pathName string,
+	start *time.Time,
+	end *time.Time,
+) ([]*Segment, error) {
+	segments, _, err := findSegmentsInDir(pathConf, pathName, end, 0)
 	if err != nil {
 		return nil, err
 	}

@@ -36,7 +36,155 @@ components:
         url:
           type: string
 
+    CoverageSegment:
+      type: object
+      properties:
+        path:
+          type: string
+          description: Path of the segment file.
+        start:
+          type: string
+          format: date-time
+          description: Start time encoded in the segment file name.
+        end:
+          type: string
+          format: date-time
+          description: Start time plus the duration stored in the segment header.
+      required: [path, start, end]
+
+    CoverageInterval:
+      type: object
+      description: A continuous time span covered by recordings.
+      properties:
+        start:
+          type: string
+          format: date-time
+        end:
+          type: string
+          format: date-time
+        segments:
+          type: array
+          description: Segments that cover the interval, sorted by start time.
+          items:
+            $ref: "#/components/schemas/CoverageSegment"
+      required: [start, end, segments]
+
+    CoverageGap:
+      type: object
+      description: A time span inside the requested range without recordings.
+      properties:
+        start:
+          type: string
+          format: date-time
+        end:
+          type: string
+          format: date-time
+      required: [start, end]
+
+    CoverageSkippedSegment:
+      type: object
+      description: >-
+        A segment found on disk that does not contribute to coverage, because it
+        vanished while the query was running, its header is invalid, or it has a
+        zero duration.
+      properties:
+        path:
+          type: string
+        start:
+          type: string
+          format: date-time
+        reason:
+          type: string
+      required: [path, start, reason]
+
+    Coverage:
+      type: object
+      properties:
+        start:
+          type: string
+          format: date-time
+          description: Requested start of the range.
+        end:
+          type: string
+          format: date-time
+          description: Requested end of the range (exclusive).
+        intervals:
+          type: array
+          items:
+            $ref: "#/components/schemas/CoverageInterval"
+        gaps:
+          type: array
+          items:
+            $ref: "#/components/schemas/CoverageGap"
+        skipped:
+          type: array
+          items:
+            $ref: "#/components/schemas/CoverageSkippedSegment"
+      required: [start, end, intervals, gaps, skipped]
+
 paths:
+  /coverage:
+    get:
+      operationId: coverageSegments
+      summary: Report which parts of a time range are covered by recordings.
+      description: >-
+        Segments are located through the recording path template, their end is
+        computed from the duration stored in the segment header, and consecutive
+        or overlapping segments are merged into a single interval. Gaps inside
+        the requested range are returned as well.
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: Path name.
+          schema:
+            type: string
+        - name: start
+          in: query
+          required: true
+          description: Start of the time range.
+          schema:
+            type: string
+            format: date-time
+        - name: end
+          in: query
+          required: true
+          description: End of the time range, which must be after start.
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Coverage of the requested time range.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Coverage"
+        "400":
+          description: Invalid parameters, invalid time interval, or unsupported record format.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No recordings found for the requested path.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: Too many recording segments to process in a single query.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error while enumerating recordings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /list:
     get:
       operationId: listSegments
