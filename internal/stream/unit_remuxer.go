@@ -9,6 +9,7 @@ import (
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h265"
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4video"
 
+	"github.com/bluenviron/mediamtx/internal/codecparams"
 	"github.com/bluenviron/mediamtx/internal/unit"
 )
 
@@ -108,17 +109,18 @@ func unitRemuxerH265(forma format.Format, payload unit.Payload) unit.Payload {
 	return unit.PayloadH265(filteredAU)
 }
 
-func unitRemuxerH264(forma format.Format, payload unit.Payload) unit.Payload {
-	formatH264 := forma.(*format.H264)
+func unitRemuxerH264(payload unit.Payload, paramSets *codecparams.H264Store) unit.Payload {
 	au := payload.(unit.PayloadH264)
 
 	randomAccess := h264.IsRandomAccess(au)
-	n := 0
 
-	// prepend parameters
-	if randomAccess && formatH264.SPS != nil && formatH264.PPS != nil {
-		n += 2
+	// parameter sets to prepend to random access frames
+	var prepend [][]byte
+	if randomAccess {
+		prepend = paramSets.ParameterSets()
 	}
+
+	n := len(prepend)
 
 	for _, nalu := range au {
 		typ := h264.NALUType(nalu[0] & 0x1F)
@@ -138,13 +140,8 @@ func unitRemuxerH264(forma format.Format, payload unit.Payload) unit.Payload {
 	}
 
 	filteredAU := make([][]byte, n)
-	i := 0
-
-	if randomAccess && formatH264.SPS != nil && formatH264.PPS != nil {
-		filteredAU[0] = formatH264.SPS
-		filteredAU[1] = formatH264.PPS
-		i = 2
-	}
+	copy(filteredAU, prepend)
+	i := len(prepend)
 
 	for _, nalu := range au {
 		typ := h264.NALUType(nalu[0] & 0x1F)
@@ -191,7 +188,7 @@ func unitRemuxerMPEG4Video(forma format.Format, payload unit.Payload) unit.Paylo
 	return frame
 }
 
-func newUnitRemuxer(forma format.Format) unitRemuxer {
+func newUnitRemuxer(forma format.Format, paramSets *codecparams.H264Store) unitRemuxer {
 	switch forma.(type) {
 	case *format.AV1:
 		return unitRemuxerAV1
@@ -200,7 +197,9 @@ func newUnitRemuxer(forma format.Format) unitRemuxer {
 		return unitRemuxerH265
 
 	case *format.H264:
-		return unitRemuxerH264
+		return func(_ format.Format, payload unit.Payload) unit.Payload {
+			return unitRemuxerH264(payload, paramSets)
+		}
 
 	case *format.MPEG4Video:
 		return unitRemuxerMPEG4Video

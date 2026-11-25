@@ -8,6 +8,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/pion/rtp"
 
+	"github.com/bluenviron/mediamtx/internal/codecparams"
 	"github.com/bluenviron/mediamtx/internal/errordumper"
 	"github.com/bluenviron/mediamtx/internal/logger"
 	"github.com/bluenviron/mediamtx/internal/ntpestimator"
@@ -55,6 +56,7 @@ type streamFormat struct {
 	ptsOffset     int64
 	formatUpdater formatUpdater
 	unitRemuxer   unitRemuxer
+	h264ParamSets *codecparams.H264Store
 	rtpEncoder    rtpEncoder
 	rtpTimeOffset uint32
 	ntpEstimator  *ntpestimator.Estimator
@@ -64,14 +66,18 @@ type streamFormat struct {
 func (sf *streamFormat) initialize() error {
 	sf.outFormat = cloneFormatShallow(sf.origFormat)
 
-	if forma, ok := sf.outFormat.(*format.H264); ok && forma.PacketizationMode == 0 {
-		sf.parent.Log(logger.Info, "remuxing in order to change H264 packetization-mode from 0 to 1")
-		forma.PacketizationMode = 1
-		sf.forceRemux = true
+	if forma, ok := sf.outFormat.(*format.H264); ok {
+		sf.h264ParamSets = codecparams.NewH264Store(forma.SPS, forma.PPS)
+
+		if forma.PacketizationMode == 0 {
+			sf.parent.Log(logger.Info, "remuxing in order to change H264 packetization-mode from 0 to 1")
+			forma.PacketizationMode = 1
+			sf.forceRemux = true
+		}
 	}
 
-	sf.formatUpdater = newFormatUpdater(sf.outFormat)
-	sf.unitRemuxer = newUnitRemuxer(sf.outFormat)
+	sf.formatUpdater = newFormatUpdater(sf.outFormat, sf.h264ParamSets)
+	sf.unitRemuxer = newUnitRemuxer(sf.outFormat, sf.h264ParamSets)
 
 	if sf.replaceNTP {
 		sf.ntpEstimator = &ntpestimator.Estimator{

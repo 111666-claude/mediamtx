@@ -4,10 +4,10 @@ import (
 	"bytes"
 
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
-	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h265"
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4video"
 
+	"github.com/bluenviron/mediamtx/internal/codecparams"
 	"github.com/bluenviron/mediamtx/internal/unit"
 )
 
@@ -53,37 +53,24 @@ func formatUpdaterH265(outFormat format.Format, payload unit.Payload, updateOutD
 	}
 }
 
-func formatUpdaterH264(outFormat format.Format, payload unit.Payload, updateOutDesc func(func())) {
+func formatUpdaterH264(
+	outFormat format.Format,
+	payload unit.Payload,
+	updateOutDesc func(func()),
+	paramSets *codecparams.H264Store,
+) {
 	formatH264 := outFormat.(*format.H264)
 	au := payload.(unit.PayloadH264)
 
-	sps, pps := formatH264.SPS, formatH264.PPS
-	update := false
-
-	for _, nalu := range au {
-		typ := h264.NALUType(nalu[0] & 0x1F)
-
-		switch typ {
-		case h264.NALUTypeSPS:
-			if !bytes.Equal(nalu, sps) {
-				sps = nalu
-				update = true
-			}
-
-		case h264.NALUTypePPS:
-			if !bytes.Equal(nalu, pps) {
-				pps = nalu
-				update = true
-			}
-		}
+	sps, pps, changed := paramSets.Update(au)
+	if !changed {
+		return
 	}
 
-	if update {
-		updateOutDesc(func() {
-			formatH264.SPS = sps
-			formatH264.PPS = pps
-		})
-	}
+	updateOutDesc(func() {
+		formatH264.SPS = sps
+		formatH264.PPS = pps
+	})
 }
 
 func formatUpdaterMPEG4Video(outFormat format.Format, payload unit.Payload, updateOutDesc func(func())) {
@@ -105,13 +92,15 @@ func formatUpdaterMPEG4Video(outFormat format.Format, payload unit.Payload, upda
 	}
 }
 
-func newFormatUpdater(outFormat format.Format) formatUpdater {
+func newFormatUpdater(outFormat format.Format, paramSets *codecparams.H264Store) formatUpdater {
 	switch outFormat.(type) {
 	case *format.H265:
 		return formatUpdaterH265
 
 	case *format.H264:
-		return formatUpdaterH264
+		return func(outFormat format.Format, payload unit.Payload, updateOutDesc func(func())) {
+			formatUpdaterH264(outFormat, payload, updateOutDesc, paramSets)
+		}
 
 	case *format.MPEG4Video:
 		return formatUpdaterMPEG4Video

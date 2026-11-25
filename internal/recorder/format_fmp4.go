@@ -21,6 +21,7 @@ import (
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4"
 	mcodecs "github.com/bluenviron/mediacommon/v2/pkg/formats/mp4/codecs"
 
+	"github.com/bluenviron/mediamtx/internal/codecparams"
 	"github.com/bluenviron/mediamtx/internal/defs"
 	"github.com/bluenviron/mediamtx/internal/formatlabel"
 	"github.com/bluenviron/mediamtx/internal/logger"
@@ -406,6 +407,10 @@ func (f *formatFMP4) initialize() bool {
 				}
 				track := addTrack(origFormat, codec)
 
+				// keep every parameter set indexed by its identifier,
+				// so that updating one PPS does not drop another one.
+				paramSets := codecparams.NewH264Store(codec.SPS, codec.PPS)
+
 				var dtsExtractor *h264.DTSExtractor
 
 				f.ri.reader.OnData(
@@ -417,26 +422,11 @@ func (f *formatFMP4) initialize() bool {
 						}
 
 						randomAccess := h264.IsRandomAccess(u.Payload.(unit.PayloadH264))
-						paramsChanged := false
 
-						for _, nalu := range u.Payload.(unit.PayloadH264) {
-							typ := h264.NALUType(nalu[0] & 0x1F)
-							switch typ {
-							case h264.NALUTypeSPS:
-								if !bytes.Equal(codec.SPS, nalu) {
-									codec.SPS = nalu
-									paramsChanged = true
-								}
-
-							case h264.NALUTypePPS:
-								if !bytes.Equal(codec.PPS, nalu) {
-									codec.PPS = nalu
-									paramsChanged = true
-								}
-							}
-						}
-
+						newSPS, newPPS, paramsChanged := paramSets.Update(u.Payload.(unit.PayloadH264))
 						if paramsChanged {
+							codec.SPS = newSPS
+							codec.PPS = newPPS
 							f.updateCodecParams()
 						}
 
