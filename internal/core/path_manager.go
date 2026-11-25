@@ -26,6 +26,10 @@ func pathConfCanBeUpdated(oldPathConf *conf.Path, newPathConf *conf.Path) bool {
 	clone.Regexp = newPathConf.Regexp
 	clone.Forward = newPathConf.Forward
 
+	// the offline file can be swapped at runtime without rebuilding the path
+	// and disconnecting readers (the Stream reloads its offline sub stream).
+	clone.AlwaysAvailableFile = newPathConf.AlwaysAvailableFile
+
 	clone.Record = newPathConf.Record
 	clone.RecordPath = newPathConf.RecordPath
 	clone.RecordFormat = newPathConf.RecordFormat

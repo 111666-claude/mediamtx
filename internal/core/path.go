@@ -450,9 +450,34 @@ func (pa *path) doOnDemandPublisherCloseTimer() {
 }
 
 func (pa *path) doReloadConf(newConf *conf.Path) {
-	pa.confMutex.Lock()
 	oldConf := pa.conf
-	pa.conf = newConf
+
+	// Swap the offline file without rebuilding the path, so connected readers
+	// are not disconnected. This validates the new file before touching the
+	// running player and leaves the old stream in place on failure.
+	fileReloadErr := func() error {
+		if !newConf.AlwaysAvailable ||
+			newConf.AlwaysAvailableFile == oldConf.AlwaysAvailableFile ||
+			pa.stream == nil {
+			return nil
+		}
+		return pa.stream.ReloadAlwaysAvailableFile(newConf.AlwaysAvailableFile)
+	}()
+
+	pa.confMutex.Lock()
+	if fileReloadErr != nil {
+		pa.Log(logger.Error, "unable to load alwaysAvailableFile '%s', "+
+			"keeping '%s' and the current stream: %v",
+			newConf.AlwaysAvailableFile, oldConf.AlwaysAvailableFile, fileReloadErr)
+
+		// Keep serving the previous, working file in the running path
+		// configuration without mutating the shared, immutable newConf.
+		runningConf := *newConf
+		runningConf.AlwaysAvailableFile = oldConf.AlwaysAvailableFile
+		pa.conf = &runningConf
+	} else {
+		pa.conf = newConf
+	}
 	pa.confMutex.Unlock()
 
 	if pa.conf.HasStaticSource() {

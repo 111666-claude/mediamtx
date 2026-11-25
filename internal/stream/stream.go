@@ -296,6 +296,8 @@ type Stream struct {
 
 	offlineDesc          *description.Session
 	mutex                sync.RWMutex
+	offlineMutex         sync.Mutex
+	closed               bool
 	subStream            *SubStream
 	offlineSubStream     *offlineSubStream
 	inboundBytes         atomic.Uint64
@@ -390,17 +392,28 @@ func (s *Stream) Initialize() error {
 
 // Close closes all resources of the stream.
 func (s *Stream) Close() {
+	s.offlineMutex.Lock()
+	if s.closed {
+		s.offlineMutex.Unlock()
+		return
+	}
+	s.closed = true
 	if s.offlineSubStream != nil {
 		s.offlineSubStream.close(false)
+		s.offlineSubStream = nil
 	}
-
-	s.inboundFramesInError.Stop()
-
-	if s.rtspStream != nil {
-		s.rtspStream.Close()
+	if s.inboundFramesInError != nil {
+		s.inboundFramesInError.Stop()
 	}
-	if s.rtspsStream != nil {
-		s.rtspsStream.Close()
+	rtspStream := s.rtspStream
+	rtspsStream := s.rtspsStream
+	s.offlineMutex.Unlock()
+
+	if rtspStream != nil {
+		rtspStream.Close()
+	}
+	if rtspsStream != nil {
+		rtspsStream.Close()
 	}
 }
 
@@ -408,6 +421,13 @@ func (s *Stream) Close() {
 func (s *Stream) StartOfflineSubStream() error {
 	if !s.AlwaysAvailable {
 		panic("should not happen")
+	}
+
+	s.offlineMutex.Lock()
+	defer s.offlineMutex.Unlock()
+
+	if s.closed {
+		return nil
 	}
 
 	oss := &offlineSubStream{
@@ -423,6 +443,82 @@ func (s *Stream) StartOfflineSubStream() error {
 	}
 
 	s.offlineSubStream = oss
+
+	return nil
+}
+
+// ReloadAlwaysAvailableFile validates the new offline file and seamlessly
+// switches the offline content without rebuilding the stream or disconnecting
+// readers.
+// If an online sub stream is currently active, the new file is only staged and
+// is used the next time the stream goes offline.
+// The old offline sub stream is kept running if the new file cannot be loaded
+// or is not compatible with the active description, so no half update is
+// produced.
+func (s *Stream) ReloadAlwaysAvailableFile(file string) error {
+	if !s.AlwaysAvailable {
+		panic("should not happen")
+	}
+
+	if file == s.AlwaysAvailableFile {
+		return nil
+	}
+
+	// Validate and parse the new file, and make sure its tracks are compatible
+	// with the existing description, before touching the running player.
+	newOfflineDesc, err := buildOfflineDesc(s.AlwaysAvailableTracks, file)
+	if err != nil {
+		return err
+	}
+
+	err = mediasAreCompatible(s.OrigDesc.Medias, newOfflineDesc.Medias)
+	if err != nil {
+		return err
+	}
+
+	s.offlineMutex.Lock()
+	defer s.offlineMutex.Unlock()
+
+	if s.closed {
+		return nil
+	}
+
+	// Stage the new configuration. It is picked up by StartOfflineSubStream()
+	// when an online publisher is active.
+	s.AlwaysAvailableFile = file
+	s.offlineDesc = newOfflineDesc
+
+	oldOfflineSubStream := s.offlineSubStream
+
+	// An online publisher owns the output: do not interrupt it. The staged
+	// file will be used on the next offline transition.
+	if oldOfflineSubStream == nil {
+		s.Parent.Log(logger.Info, "online publisher is active, "+
+			"alwaysAvailableFile '%s' will be used after the stream goes offline", file)
+		return nil
+	}
+
+	// Offline: atomically replace the offline sub stream. The old player is
+	// stopped before the new one is started, and SubStream.Initialize() keeps
+	// RTP timestamps continuous through the shared last-PTS baseline.
+	// Waiting for the last sample avoids cutting it short.
+	oldOfflineSubStream.close(true)
+	s.offlineSubStream = nil
+
+	oss := &offlineSubStream{
+		stream: s,
+	}
+	err = oss.initialize()
+	if err != nil {
+		// Unreachable thanks to the pre-validation above. Keep state coherent
+		// and make sure no player is leaked.
+		s.offlineSubStream = nil
+		return err
+	}
+
+	s.offlineSubStream = oss
+
+	s.Parent.Log(logger.Info, "switched alwaysAvailableFile to '%s' without interrupting readers", file)
 
 	return nil
 }

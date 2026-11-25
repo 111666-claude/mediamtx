@@ -17,6 +17,7 @@ import (
 	mcodecs "github.com/bluenviron/mediacommon/v2/pkg/formats/mp4/codecs"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/pmp4"
 
+	"github.com/bluenviron/mediamtx/internal/logger"
 	"github.com/bluenviron/mediamtx/internal/unit"
 )
 
@@ -84,13 +85,17 @@ func (t *offlineSubStreamTrack) run() {
 	if t.file != "" {
 		f, err := os.Open(t.file)
 		if err != nil {
-			panic(err)
+			// The file is validated before being loaded, so this is an
+			// unexpected runtime error. Log it and terminate this player
+			// cleanly instead of crashing the whole process.
+			t.subStream.Stream.Parent.Log(logger.Error, "offline file '%s' cannot be opened: %v", t.file, err)
+			return
 		}
 		defer f.Close()
 
 		err = t.runFile(f, t.pos)
 		if err != nil {
-			panic(err)
+			t.subStream.Stream.Parent.Log(logger.Error, "offline file '%s' stopped with an error: %v", t.file, err)
 		}
 		return
 	}
