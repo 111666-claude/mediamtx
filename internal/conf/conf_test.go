@@ -1222,3 +1222,29 @@ func TestConfAddDeprecatedCredentialsTwice(t *testing.T) {
 	require.NoError(t, c3.PatchPath("test", &patch))
 	require.Equal(t, c2, c3)
 }
+
+func TestConfRegexpPathWithAlwaysAvailable(t *testing.T) {
+	for _, ca := range []string{
+		"regexp",
+		"all_others",
+	} {
+		t.Run(ca, func(t *testing.T) {
+			name := "~^cam_(.+)$"
+			if ca == "all_others" {
+				name = "all_others"
+			}
+
+			cnf, _, err := Load(createTempFile(t, []byte("paths:\n"+
+				"  "+name+":\n"+
+				"    alwaysAvailable: yes\n"+
+				"    alwaysAvailableTracks:\n"+
+				"      - codec: H264\n")), nil, nil)
+			require.NoError(t, err)
+
+			pconf, _, err := FindPathConf(cnf.Paths, "cam_one")
+			require.NoError(t, err)
+			require.True(t, pconf.AlwaysAvailable)
+			require.NotNil(t, pconf.Regexp)
+		})
+	}
+}

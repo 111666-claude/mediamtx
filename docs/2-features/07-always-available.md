@@ -38,3 +38,5 @@ paths:
     alwaysAvailableTracks:
       - codec: H264
 ```
+
+The option can also be used with a regular expression-based path (or with `all_others`). In that case paths are not created at startup: a path instance, together with its offline stream, is created on demand when a reader or publisher requests a matching name. The instance keeps serving readers while a publisher connects and disconnects, and is destroyed together with its offline resources after staying idle (no source and no readers) for a grace period. A request on a name that does not match any regular expression does not create any instance.

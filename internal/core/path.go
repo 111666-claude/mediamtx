@@ -31,6 +31,11 @@ func emptyTimer() *time.Timer {
 	return t
 }
 
+// idleCloseAfter is the grace period during which a dynamic path (created on
+// demand from a regular expression-based config) can stay idle before it is
+// destroyed together with its offline resources.
+var idleCloseAfter = 10 * time.Second
+
 type pathParent interface {
 	logger.Writer
 	setPathReady(*path)
@@ -147,6 +152,7 @@ type path struct {
 	onDemandPublisherState         pathOnDemandState
 	onDemandPublisherReadyTimer    *time.Timer
 	onDemandPublisherCloseTimer    *time.Timer
+	idleCloseTimer                 *time.Timer
 
 	// in
 	chReloadConf              chan *conf.Path
@@ -175,6 +181,7 @@ func (pa *path) initialize() {
 	pa.onDemandStaticSourceCloseTimer = emptyTimer()
 	pa.onDemandPublisherReadyTimer = emptyTimer()
 	pa.onDemandPublisherCloseTimer = emptyTimer()
+	pa.idleCloseTimer = emptyTimer()
 	pa.chReloadConf = make(chan *conf.Path)
 	pa.chStaticSourceSetReady = make(chan defs.PathSourceStaticSetReadyReq)
 	pa.chStaticSourceSetNotReady = make(chan defs.PathSourceStaticSetNotReadyReq)
@@ -236,7 +243,16 @@ func (pa *path) run() {
 	if pa.conf.AlwaysAvailable {
 		err := pa.setAvailable(nil, "", nil, true)
 		if err != nil {
-			panic(err)
+			if pa.conf.Regexp == nil {
+				// static paths are created at startup: fail fast so the
+				// invalid configuration is reported immediately
+				panic(err)
+			}
+
+			// dynamic paths are created on demand: keep the instance alive in an
+			// unavailable state and let it be destroyed during idle cleanup,
+			// instead of crashing the whole server or leaking the instance
+			pa.Log(logger.Error, "unable to initialize the offline stream: %v", err)
 		}
 	}
 
@@ -273,6 +289,10 @@ func (pa *path) run() {
 		ExternalCmdEnv:  pa.ExternalCmdEnv(),
 	})
 
+	// a dynamic path created on demand must destroy itself once it has been
+	// idle (no source and no readers) for the configured grace period
+	pa.updateIdleCloseTimer()
+
 	err := pa.runInner()
 
 	// call before destroying context
@@ -284,6 +304,7 @@ func (pa *path) run() {
 	pa.onDemandStaticSourceCloseTimer.Stop()
 	pa.onDemandPublisherReadyTimer.Stop()
 	pa.onDemandPublisherCloseTimer.Stop()
+	pa.idleCloseTimer.Stop()
 
 	onUnInitHook()
 
@@ -321,81 +342,59 @@ func (pa *path) runInner() error {
 		select {
 		case <-pa.onDemandStaticSourceReadyTimer.C:
 			pa.doOnDemandStaticSourceReadyTimer()
-
-			if pa.shouldClose() {
-				pa.parent.closePathIfIdle(pa)
-			}
+			pa.updateIdleCloseTimer()
 
 		case <-pa.onDemandStaticSourceCloseTimer.C:
 			pa.doOnDemandStaticSourceCloseTimer()
-
-			if pa.shouldClose() {
-				pa.parent.closePathIfIdle(pa)
-			}
+			pa.updateIdleCloseTimer()
 
 		case <-pa.onDemandPublisherReadyTimer.C:
 			pa.doOnDemandPublisherReadyTimer()
-
-			if pa.shouldClose() {
-				pa.parent.closePathIfIdle(pa)
-			}
+			pa.updateIdleCloseTimer()
 
 		case <-pa.onDemandPublisherCloseTimer.C:
 			pa.doOnDemandPublisherCloseTimer()
+			pa.updateIdleCloseTimer()
+
+		case <-pa.idleCloseTimer.C:
+			pa.doIdleCloseTimer()
 
 		case newConf := <-pa.chReloadConf:
 			pa.doReloadConf(newConf)
 
 		case req := <-pa.chStaticSourceSetReady:
 			pa.doSourceStaticSetReady(req)
+			pa.updateIdleCloseTimer()
 
 		case req := <-pa.chStaticSourceSetNotReady:
 			pa.doSourceStaticSetNotReady(req)
-
-			if pa.shouldClose() {
-				pa.parent.closePathIfIdle(pa)
-			}
+			pa.updateIdleCloseTimer()
 
 		case req := <-pa.chDescribe:
 			pa.doDescribe(req)
 
 			pa.pendingRequests.Add(-1)
-
-			if pa.shouldClose() {
-				pa.parent.closePathIfIdle(pa)
-			}
+			pa.updateIdleCloseTimer()
 
 		case req := <-pa.chAddPublisher:
 			pa.doAddPublisher(req)
 
 			pa.pendingRequests.Add(-1)
-
-			if pa.shouldClose() {
-				pa.parent.closePathIfIdle(pa)
-			}
+			pa.updateIdleCloseTimer()
 
 		case req := <-pa.chRemovePublisher:
 			pa.doRemovePublisher(req)
-
-			if pa.shouldClose() {
-				pa.parent.closePathIfIdle(pa)
-			}
+			pa.updateIdleCloseTimer()
 
 		case req := <-pa.chAddReader:
 			pa.doAddReader(req)
 
 			pa.pendingRequests.Add(-1)
-
-			if pa.shouldClose() {
-				pa.parent.closePathIfIdle(pa)
-			}
+			pa.updateIdleCloseTimer()
 
 		case req := <-pa.chRemoveReader:
 			pa.doRemoveReader(req)
-
-			if pa.shouldClose() {
-				pa.parent.closePathIfIdle(pa)
-			}
+			pa.updateIdleCloseTimer()
 
 		case req := <-pa.chAPIPathsGet:
 			pa.doAPIPathsGet(req)
@@ -478,6 +477,8 @@ func (pa *path) doReloadConf(newConf *conf.Path) {
 		(!newConf.AlwaysAvailable || newConf.AlwaysAvailableRecorded || pa.isOnline()) {
 		pa.startRecording()
 	}
+
+	pa.updateIdleCloseTimer()
 }
 
 func (pa *path) doSourceStaticSetReady(req defs.PathSourceStaticSetReadyReq) {
@@ -487,6 +488,13 @@ func (pa *path) doSourceStaticSetReady(req defs.PathSourceStaticSetReadyReq) {
 			req.Res <- defs.PathSourceStaticSetReadyRes{Err: err}
 			return
 		}
+	}
+
+	if pa.stream == nil {
+		req.Res <- defs.PathSourceStaticSetReadyRes{
+			Err: fmt.Errorf("the offline stream of path '%s' is not available", pa.name),
+		}
+		return
 	}
 
 	subStream := &stream.SubStream{
@@ -611,6 +619,13 @@ func (pa *path) doAddPublisher(req defs.PathAddPublisherReq) {
 			req.Res <- defs.PathAddPublisherRes{Err: err}
 			return
 		}
+	}
+
+	if pa.stream == nil {
+		req.Res <- defs.PathAddPublisherRes{
+			Err: fmt.Errorf("the offline stream of path '%s' is not available", pa.name),
+		}
+		return
 	}
 
 	subStream := &stream.SubStream{
@@ -839,6 +854,35 @@ func (pa *path) shouldClose() bool {
 		len(pa.readerAddRequestsOnHold) == 0
 }
 
+// scheduleIdleClose arms the timer that destroys a dynamic path when it has
+// been idle (no source and no readers) for the configured grace period.
+// The timer is disarmed as soon as the path is busy again.
+func (pa *path) scheduleIdleClose() {
+	pa.idleCloseTimer.Stop()
+	pa.idleCloseTimer = time.NewTimer(idleCloseAfter)
+}
+
+func (pa *path) cancelIdleClose() {
+	pa.idleCloseTimer.Stop()
+	pa.idleCloseTimer = emptyTimer()
+}
+
+// updateIdleCloseTimer (re)arms the idle close timer when the dynamic path is
+// idle, or disarms it while the path has a source, a reader or pending requests.
+func (pa *path) updateIdleCloseTimer() {
+	if pa.shouldClose() {
+		pa.scheduleIdleClose()
+	} else {
+		pa.cancelIdleClose()
+	}
+}
+
+func (pa *path) doIdleCloseTimer() {
+	if pa.shouldClose() {
+		pa.parent.closePathIfIdle(pa)
+	}
+}
+
 func (pa *path) onDemandStaticSourceStart(query string) {
 	pa.source.(*staticsources.Handler).Start(true, query)
 
@@ -952,6 +996,8 @@ func (pa *path) setAvailable(
 	}
 	err := pa.stream.Initialize()
 	if err != nil {
+		pa.stream.Close()
+		pa.stream = nil
 		return err
 	}
 

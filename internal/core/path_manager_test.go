@@ -3,6 +3,7 @@ package core
 import (
 	"net/http"
 	"regexp"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,6 +40,11 @@ func (d *dummyReader) APIReaderDescribe() *defs.APIPathReader {
 }
 
 func TestPathManagerDynamicPathAutoDeletion(t *testing.T) {
+	// shorten the idle grace period so the test does not wait for the default value
+	prevIdleCloseAfter := idleCloseAfter
+	idleCloseAfter = 200 * time.Millisecond
+	t.Cleanup(func() { idleCloseAfter = prevIdleCloseAfter })
+
 	for _, ca := range []string{"describe", "add reader"} {
 		t.Run(ca, func(t *testing.T) {
 			pathConfs := map[string]*conf.Path{
@@ -76,12 +82,12 @@ func TestPathManagerDynamicPathAutoDeletion(t *testing.T) {
 				}
 			}()
 
-			time.Sleep(100 * time.Millisecond)
-
-			data, err := pm.APIPathsList()
-			require.NoError(t, err)
-
-			require.Empty(t, data.Items)
+			// the path is kept during the idle grace period and destroyed afterwards
+			require.Eventually(t, func() bool {
+				data, err := pm.APIPathsList()
+				require.NoError(t, err)
+				return len(data.Items) == 0
+			}, 5*time.Second, 50*time.Millisecond)
 		})
 	}
 }
@@ -121,6 +127,65 @@ func TestPathManagerDynamicPathDescribeAndPublish(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+}
+
+func TestPathManagerDynamicPathAlwaysAvailableConcurrency(t *testing.T) {
+	pathConfs := map[string]*conf.Path{
+		"cam": {
+			Regexp:          regexp.MustCompile("^cam_(.+)$"),
+			Name:            "cam",
+			Source:          "publisher",
+			AlwaysAvailable: true,
+			AlwaysAvailableTracks: []conf.AlwaysAvailableTrack{
+				{Codec: conf.CodecH264},
+			},
+		},
+	}
+
+	pm := &pathManager{
+		authManager: test.NilAuthManager,
+		pathConfs:   pathConfs,
+		parent:      test.NilLogger,
+	}
+	pm.initialize()
+	defer pm.close()
+
+	// a name that does not match the regular expression must not create an instance
+	_, err := pm.Describe(defs.PathDescribeReq{
+		AccessRequest: defs.PathAccessRequest{Name: "other_thing"},
+	})
+	require.Error(t, err)
+
+	data, err := pm.APIPathsList()
+	require.NoError(t, err)
+	require.Empty(t, data.Items)
+
+	// parallel requests on the same name must create exactly one shared instance
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err2 := pm.Describe(defs.PathDescribeReq{
+				AccessRequest: defs.PathAccessRequest{Name: "cam_one"},
+			})
+			require.NoError(t, err2)
+		}()
+	}
+	wg.Wait()
+
+	data, err = pm.APIPathsList()
+	require.NoError(t, err)
+	require.Len(t, data.Items, 1)
+	require.Equal(t, "cam_one", data.Items[0].Name)
+	require.True(t, data.Items[0].Ready)
+
+	// the single instance is destroyed after the idle grace period, with no leak
+	require.Eventually(t, func() bool {
+		list, err2 := pm.APIPathsList()
+		require.NoError(t, err2)
+		return len(list.Items) == 0
+	}, 5*time.Second, 50*time.Millisecond)
 }
 
 func TestPathManagerAuthExpiration(t *testing.T) {

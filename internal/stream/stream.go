@@ -314,6 +314,14 @@ type Stream struct {
 
 // Initialize initializes a Stream.
 func (s *Stream) Initialize() error {
+	ok := false
+	defer func() {
+		if !ok {
+			// release every resource allocated before the failure
+			s.Close()
+		}
+	}()
+
 	if s.AlwaysAvailable {
 		if s.OrigDesc != nil {
 			panic("should not happen")
@@ -383,16 +391,21 @@ func (s *Stream) Initialize() error {
 		}
 	}
 
+	ok = true
+
 	return nil
 }
 
 // Close closes all resources of the stream.
+// It is safe to call it on a stream whose Initialize failed halfway.
 func (s *Stream) Close() {
 	if s.offlineSubStream != nil {
 		s.offlineSubStream.close(false)
 	}
 
-	s.inboundFramesInError.Stop()
+	if s.inboundFramesInError != nil {
+		s.inboundFramesInError.Stop()
+	}
 
 	if s.rtspStream != nil {
 		s.rtspStream.Close()
