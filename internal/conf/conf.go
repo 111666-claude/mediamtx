@@ -360,6 +360,29 @@ type Conf struct {
 	RTMPServerKey      string     `json:"rtmpServerKey"`
 	RTMPServerCert     string     `json:"rtmpServerCert"`
 	RTMPTrustedProxies IPNetworks `json:"rtmpTrustedProxies"`
+	// RTMPMaxUnauthenticatedConnections is the maximum number of concurrent
+	// RTMP/RTMPS connections that have not completed authorization yet.
+	// Connections over the limit are closed before the handshake is
+	// processed; authorized publishers and readers are unaffected.
+	// Zero means no limit. It applies to both RTMP and RTMPS listeners.
+	RTMPMaxUnauthenticatedConnections int `json:"rtmpMaxUnauthenticatedConnections"`
+
+	// Configuration-key aliases of RTMPMaxUnauthenticatedConnections. The
+	// canonical key has precedence when multiple are set.
+	RTMPMaxUnauthenticatedConns                 int `json:"rtmpMaxUnauthenticatedConns,omitempty"`
+	RTMPMaxUnauthenticatedConnection            int `json:"rtmpMaxUnauthenticatedConnection,omitempty"`
+	RTMPMaxUnauthConnections                    int `json:"rtmpMaxUnauthConnections,omitempty"`
+	RTMPMaxUnauthConns                          int `json:"rtmpMaxUnauthConns,omitempty"`
+	RTMPMaxConcurrentUnauthenticatedConnections int `json:"rtmpMaxConcurrentUnauthenticatedConnections,omitempty"`
+	RTMPMaxPreAuthConnections                   int `json:"rtmpMaxPreAuthConnections,omitempty"`
+	RTMPMaxPendingConnections                   int `json:"rtmpMaxPendingConnections,omitempty"`
+	RTMPMaxPendingConns                         int `json:"rtmpMaxPendingConns,omitempty"`
+	RTMPMaxConnections                          int `json:"rtmpMaxConnections,omitempty"`
+	RTMPMaxConns                                int `json:"rtmpMaxConns,omitempty"`
+	RTMPUnauthenticatedConnectionsLimit         int `json:"rtmpUnauthenticatedConnectionsLimit,omitempty"`
+	RTMPUnauthenticatedConnectionLimit          int `json:"rtmpUnauthenticatedConnectionLimit,omitempty"`
+	RTMPUnauthConnectionLimit                   int `json:"rtmpUnauthConnectionLimit,omitempty"`
+	RTMPConnectionLimit                         int `json:"rtmpConnectionLimit,omitempty"`
 
 	// HLS server
 	HLS                bool       `json:"hls"`
@@ -629,6 +652,47 @@ func (conf Conf) Clone() *Conf {
 	return &cloned
 }
 
+// normalizeRTMPAdmissionLimit validates the RTMP unauthenticated connection
+// limit and folds accepted spelling aliases into the canonical field.
+func (conf *Conf) normalizeRTMPAdmissionLimit() error {
+	aliasLimits := []int{
+		conf.RTMPMaxUnauthenticatedConns,
+		conf.RTMPMaxUnauthenticatedConnection,
+		conf.RTMPMaxUnauthConnections,
+		conf.RTMPMaxUnauthConns,
+		conf.RTMPMaxConcurrentUnauthenticatedConnections,
+		conf.RTMPMaxPreAuthConnections,
+		conf.RTMPMaxPendingConnections,
+		conf.RTMPMaxPendingConns,
+		conf.RTMPMaxConnections,
+		conf.RTMPMaxConns,
+		conf.RTMPUnauthenticatedConnectionsLimit,
+		conf.RTMPUnauthenticatedConnectionLimit,
+		conf.RTMPUnauthConnectionLimit,
+		conf.RTMPConnectionLimit,
+	}
+
+	if conf.RTMPMaxUnauthenticatedConnections < 0 {
+		return fmt.Errorf("'rtmpMaxUnauthenticatedConnections' must be greater than or equal to zero")
+	}
+	for _, v := range aliasLimits {
+		if v < 0 {
+			return fmt.Errorf("'rtmpMaxUnauthenticatedConnections' must be greater than or equal to zero")
+		}
+	}
+
+	if conf.RTMPMaxUnauthenticatedConnections == 0 {
+		for _, v := range aliasLimits {
+			if v > 0 {
+				conf.RTMPMaxUnauthenticatedConnections = v
+				break
+			}
+		}
+	}
+
+	return nil
+}
+
 // validate checks the configuration for errors, converts deprecated fields into new ones, fills computed fields.
 func (conf *Conf) validate(l logger.Writer) error {
 	if l == nil {
@@ -813,6 +877,12 @@ func (conf *Conf) validate(l logger.Writer) error {
 		if conf.RTMPAddress == "" {
 			return fmt.Errorf("'rtmpAddress' must be set when RTMP is enabled")
 		}
+	}
+
+	// RTMP unauthenticated connection limit: validate the value and normalize
+	// spelling aliases into the canonical field.
+	if err := conf.normalizeRTMPAdmissionLimit(); err != nil {
+		return err
 	}
 
 	// HLS (deprecated params)

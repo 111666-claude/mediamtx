@@ -34,3 +34,15 @@ paths:
 ```
 
 And then read `rtmp://localhost/decrypted` instead of `rtmps://original-stream`.
+
+## Limiting unauthenticated connections
+
+Every accepted RTMP/RTMPS connection consumes a socket and goroutine, and slow clients can hold resources while they perform the handshake or wait for authentication. The `rtmpMaxUnauthenticatedConnections` parameter bounds how many of these not-yet-authorized connections can be open at the same time:
+
+```yml
+rtmpMaxUnauthenticatedConnections: 100
+```
+
+Admission is enforced before the handshake, protocol parsing and the `runOnConnect` hook. When the limit is reached, new connections are closed immediately. As soon as a connection authenticates successfully, or when it fails, times out or disconnects, its slot is released. Already authorized publishers and readers are therefore never limited or disconnected by this parameter, and each of RTMP and RTMPS gets its own independent budget.
+
+The value can be reloaded at runtime without dropping active connections. The default value is `0`, which means no limit and preserves the standard behavior.

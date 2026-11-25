@@ -25,19 +25,21 @@ import (
 )
 
 type conn struct {
-	parentCtx           context.Context
-	encryption          bool
-	rtspAddress         string
-	readTimeout         conf.Duration
-	writeTimeout        conf.Duration
-	runOnConnect        string
-	runOnConnectRestart bool
-	runOnDisconnect     string
-	wg                  *sync.WaitGroup
-	nconn               net.Conn
-	externalCmdPool     *externalcmd.Pool
-	pathManager         serverPathManager
-	parent              *Server
+	parentCtx            context.Context
+	encryption           bool
+	rtspAddress          string
+	readTimeout          conf.Duration
+	writeTimeout         conf.Duration
+	runOnConnect         string
+	runOnConnectRestart  bool
+	runOnDisconnect      string
+	wg                   *sync.WaitGroup
+	nconn                net.Conn
+	externalCmdPool      *externalcmd.Pool
+	pathManager          serverPathManager
+	parent               *Server
+	limiter              *unauthenticatedConnLimiter
+	releaseAdmissionOnce sync.Once
 
 	ctx       context.Context
 	ctxCancel func()
@@ -71,6 +73,21 @@ func (c *conn) Close() {
 	c.ctxCancel()
 }
 
+// releaseAdmission returns the unauthenticated-concurrency slot reserved at
+// admission time. It is safe to call multiple times and from multiple
+// goroutines: the slot is released at most once. It is invoked both right
+// after successful authorization (to free the budget for long-lived
+// authorized sessions) and from the termination defer in run (to cover
+// authentication failure, handshake/parse errors, timeouts, disconnects and
+// server shutdown).
+func (c *conn) releaseAdmission() {
+	c.releaseAdmissionOnce.Do(func() {
+		if c.limiter != nil {
+			c.limiter.release()
+		}
+	})
+}
+
 func (c *conn) remoteAddr() net.Addr {
 	return c.nconn.RemoteAddr()
 }
@@ -87,6 +104,11 @@ func (c *conn) ip() net.IP {
 func (c *conn) run() { //nolint:dupl
 	defer c.wg.Done()
 
+	// Safety net: return the admission slot on every termination path
+	// (handshake/parse error, auth failure, timeout, disconnect, kick,
+	// server shutdown or panic). It is a no-op once released early.
+	defer c.releaseAdmission()
+
 	onDisconnectHook := hooks.OnConnect(hooks.OnConnectParams{
 		Logger:              c,
 		ExternalCmdPool:     c.externalCmdPool,
@@ -101,6 +123,10 @@ func (c *conn) run() { //nolint:dupl
 	err := c.runInner()
 
 	c.ctxCancel()
+
+	// Return the slot before unregistering the connection, so quota
+	// accounting never lags behind the connection list.
+	c.releaseAdmission()
 
 	c.parent.closeConn(c)
 
@@ -190,6 +216,10 @@ func (c *conn) runRead(errGroupCtx context.Context, errGroup *errgroup.Group) er
 
 		return err
 	}
+
+	// authorization succeeded: the session is now an authorized reader,
+	// so it stops consuming the unauthenticated-connection budget.
+	c.releaseAdmission()
 
 	defer res.Path.RemoveReader(defs.PathRemoveReaderReq{Author: c})
 
@@ -296,6 +326,10 @@ func (c *conn) runPublish(errGroupCtx context.Context, errGroup *errgroup.Group)
 
 		return err
 	}
+
+	// authorization succeeded: the session is now an authorized publisher,
+	// so it stops consuming the unauthenticated-connection budget.
+	c.releaseAdmission()
 
 	if res1.AuthRes.ExpiresAt != nil {
 		errGroup.Go(func() error {

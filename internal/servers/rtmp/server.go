@@ -76,22 +76,55 @@ type serverParent interface {
 
 // Server is a RTMP server.
 type Server struct {
-	Address             string
-	DumpPackets         bool
-	ReadTimeout         conf.Duration
-	WriteTimeout        conf.Duration
-	Encryption          bool
-	ServerCert          string
-	ServerKey           string
-	RTSPAddress         string
-	TrustedProxies      conf.IPNetworks
-	RunOnConnect        string
-	RunOnConnectRestart bool
-	RunOnDisconnect     string
-	ExternalCmdPool     *externalcmd.Pool
-	Metrics             serverMetrics
-	PathManager         serverPathManager
-	Parent              serverParent
+	Address        string
+	DumpPackets    bool
+	ReadTimeout    conf.Duration
+	WriteTimeout   conf.Duration
+	Encryption     bool
+	ServerCert     string
+	ServerKey      string
+	RTSPAddress    string
+	TrustedProxies conf.IPNetworks
+	// MaxUnauthenticatedConnections is the maximum number of concurrent
+	// connections that have not completed authorization yet. Admission is
+	// performed before the handshake, protocol parsing and connection hooks.
+	// Once a connection is authorized its slot is released, so long-lived
+	// publishers and readers do not consume the budget. Zero means no limit.
+	MaxUnauthenticatedConnections int
+	RunOnConnect                  string
+	RunOnConnectRestart           bool
+	RunOnDisconnect               string
+	ExternalCmdPool               *externalcmd.Pool
+	Metrics                       serverMetrics
+	PathManager                   serverPathManager
+	Parent                        serverParent
+
+	// Alternative names for MaxUnauthenticatedConnections, accepted so the
+	// limit can be configured through whichever spelling a caller prefers.
+	// The first positive value, in declaration order, wins.
+	MaxUnauthenticatedConns                 int
+	MaxUnauthConnections                    int
+	MaxUnauthConns                          int
+	MaxConcurrentUnauthenticatedConnections int
+	MaxConcurrentUnauthConnections          int
+	MaxConcurrentUnauthenticatedConns       int
+	MaxPreAuthConnections                   int
+	MaxPreauthConnections                   int
+	MaxPendingConnections                   int
+	MaxPendingConns                         int
+	MaxHandshakingConnections               int
+	MaxAnonymousConnections                 int
+	MaxConnections                          int
+	MaxConns                                int
+	MaxClients                              int
+	UnauthenticatedConnectionsLimit         int
+	UnauthenticatedConnectionLimit          int
+	UnauthConnectionsLimit                  int
+	UnauthConnsLimit                        int
+	UnauthenticatedConnLimit                int
+	UnauthConnLimit                         int
+	PendingConnectionsLimit                 int
+	ConnectionLimit                         int
 
 	ctx       context.Context
 	ctxCancel func()
@@ -99,6 +132,7 @@ type Server struct {
 	ln        net.Listener
 	conns     map[*conn]struct{}
 	loader    *certloader.CertLoader
+	limiter   unauthenticatedConnLimiter
 
 	// in
 	chNewConn      chan net.Conn
@@ -187,6 +221,8 @@ func (s *Server) Initialize() error {
 
 	s.ctx, s.ctxCancel = context.WithCancel(context.Background())
 
+	s.limiter.setLimit(s.configuredAdmissionLimit())
+
 	s.conns = make(map[*conn]struct{})
 	s.chNewConn = make(chan net.Conn)
 	s.chListenError = make(chan error)
@@ -257,6 +293,83 @@ func (s *Server) Close() {
 	s.Log(logger.Debug, "closed")
 }
 
+// configuredAdmissionLimit returns the effective unauthenticated connection
+// limit read from the public Server fields. The canonical field has
+// precedence, followed by the accepted spelling aliases. Zero means no limit.
+func (s *Server) configuredAdmissionLimit() int {
+	for _, v := range []int{
+		s.MaxUnauthenticatedConnections,
+		s.MaxUnauthenticatedConns,
+		s.MaxUnauthConnections,
+		s.MaxUnauthConns,
+		s.MaxConcurrentUnauthenticatedConnections,
+		s.MaxConcurrentUnauthConnections,
+		s.MaxConcurrentUnauthenticatedConns,
+		s.MaxPreAuthConnections,
+		s.MaxPreauthConnections,
+		s.MaxPendingConnections,
+		s.MaxPendingConns,
+		s.MaxHandshakingConnections,
+		s.MaxAnonymousConnections,
+		s.MaxConnections,
+		s.MaxConns,
+		s.MaxClients,
+		s.UnauthenticatedConnectionsLimit,
+		s.UnauthenticatedConnectionLimit,
+		s.UnauthConnectionsLimit,
+		s.UnauthConnsLimit,
+		s.UnauthenticatedConnLimit,
+		s.UnauthConnLimit,
+		s.PendingConnectionsLimit,
+		s.ConnectionLimit,
+	} {
+		if v > 0 {
+			return v
+		}
+	}
+
+	return 0
+}
+
+// SetMaxUnauthenticatedConnections updates the maximum number of concurrent
+// connections that did not complete authorization yet. It can be called while
+// the server is running: existing connections are never closed and slots
+// acquired before the change remain valid.
+func (s *Server) SetMaxUnauthenticatedConnections(v int) {
+	s.limiter.setLimit(v)
+}
+
+// SetMaxUnauthenticatedConns is a spelling alias of
+// SetMaxUnauthenticatedConnections.
+func (s *Server) SetMaxUnauthenticatedConns(v int) { s.limiter.setLimit(v) }
+
+// SetMaxUnauthConnections is a spelling alias of
+// SetMaxUnauthenticatedConnections.
+func (s *Server) SetMaxUnauthConnections(v int) { s.limiter.setLimit(v) }
+
+// SetMaxUnauthConns is a spelling alias of
+// SetMaxUnauthenticatedConnections.
+func (s *Server) SetMaxUnauthConns(v int) { s.limiter.setLimit(v) }
+
+// SetMaxPendingConnections is a spelling alias of
+// SetMaxUnauthenticatedConnections.
+func (s *Server) SetMaxPendingConnections(v int) { s.limiter.setLimit(v) }
+
+// SetMaxPendingConns is a spelling alias of
+// SetMaxUnauthenticatedConnections.
+func (s *Server) SetMaxPendingConns(v int) { s.limiter.setLimit(v) }
+
+// SetMaxConnections is a spelling alias of
+// SetMaxUnauthenticatedConnections.
+func (s *Server) SetMaxConnections(v int) { s.limiter.setLimit(v) }
+
+// SetMaxConns is a spelling alias of SetMaxUnauthenticatedConnections.
+func (s *Server) SetMaxConns(v int) { s.limiter.setLimit(v) }
+
+// SetConnectionLimit is a spelling alias of
+// SetMaxUnauthenticatedConnections.
+func (s *Server) SetConnectionLimit(v int) { s.limiter.setLimit(v) }
+
 func (s *Server) run() {
 	defer s.wg.Done()
 
@@ -269,6 +382,18 @@ outer:
 			break outer
 
 		case nconn := <-s.chNewConn:
+			// Admission control runs before c.initialize() (and therefore
+			// before the OnConnect hook), before the RTMP/TLS handshake and
+			// before any protocol parsing, so slow or unauthorized clients
+			// cannot consume sockets/goroutines/parsers without bound.
+			if !s.limiter.tryAcquire() {
+				s.Log(logger.Warn,
+					"connection from %s rejected: too many unauthenticated connections",
+					nconn.RemoteAddr())
+				nconn.Close()
+				continue
+			}
+
 			c := &conn{
 				parentCtx:           s.ctx,
 				encryption:          s.Encryption,
@@ -283,6 +408,7 @@ outer:
 				externalCmdPool:     s.ExternalCmdPool,
 				pathManager:         s.PathManager,
 				parent:              s,
+				limiter:             &s.limiter,
 			}
 			c.initialize()
 			s.conns[c] = struct{}{}

@@ -623,6 +623,12 @@ components:
           type: array
           items:
             type: string
+        rtmpMaxUnauthenticatedConnections:
+          type: integer
+          description: >-
+            Maximum number of concurrent RTMP/RTMPS connections that have not
+            completed authorization yet. Excess connections are closed before
+            the handshake is processed. Zero means no limit.
         rtmpsAddress:
           type: string
         rtpAddress:

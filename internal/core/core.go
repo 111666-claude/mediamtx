@@ -830,22 +830,23 @@ func (p *Core) createResources(initial bool) error {
 			p.conf.RTMPEncryption == conf.EncryptionOptional) &&
 		p.rtmpServer == nil {
 		i := &rtmp.Server{
-			Address:             p.conf.RTMPAddress,
-			DumpPackets:         p.conf.DumpPackets,
-			ReadTimeout:         p.conf.ReadTimeout,
-			WriteTimeout:        p.conf.WriteTimeout,
-			Encryption:          false,
-			ServerCert:          "",
-			ServerKey:           "",
-			RTSPAddress:         p.conf.RTSPAddress,
-			TrustedProxies:      p.conf.RTMPTrustedProxies,
-			RunOnConnect:        p.conf.RunOnConnect,
-			RunOnConnectRestart: p.conf.RunOnConnectRestart,
-			RunOnDisconnect:     p.conf.RunOnDisconnect,
-			ExternalCmdPool:     p.externalCmdPool,
-			Metrics:             p.metrics,
-			PathManager:         p.pathManager,
-			Parent:              p,
+			Address:                       p.conf.RTMPAddress,
+			DumpPackets:                   p.conf.DumpPackets,
+			ReadTimeout:                   p.conf.ReadTimeout,
+			WriteTimeout:                  p.conf.WriteTimeout,
+			Encryption:                    false,
+			ServerCert:                    "",
+			ServerKey:                     "",
+			RTSPAddress:                   p.conf.RTSPAddress,
+			TrustedProxies:                p.conf.RTMPTrustedProxies,
+			MaxUnauthenticatedConnections: p.conf.RTMPMaxUnauthenticatedConnections,
+			RunOnConnect:                  p.conf.RunOnConnect,
+			RunOnConnectRestart:           p.conf.RunOnConnectRestart,
+			RunOnDisconnect:               p.conf.RunOnDisconnect,
+			ExternalCmdPool:               p.externalCmdPool,
+			Metrics:                       p.metrics,
+			PathManager:                   p.pathManager,
+			Parent:                        p,
 		}
 		err = i.Initialize()
 		if err != nil {
@@ -859,22 +860,23 @@ func (p *Core) createResources(initial bool) error {
 			p.conf.RTMPEncryption == conf.EncryptionOptional) &&
 		p.rtmpsServer == nil {
 		i := &rtmp.Server{
-			Address:             p.conf.RTMPSAddress,
-			ReadTimeout:         p.conf.ReadTimeout,
-			WriteTimeout:        p.conf.WriteTimeout,
-			Encryption:          true,
-			ServerCert:          p.conf.RTMPServerCert,
-			ServerKey:           p.conf.RTMPServerKey,
-			DumpPackets:         p.conf.DumpPackets,
-			RTSPAddress:         p.conf.RTSPAddress,
-			TrustedProxies:      p.conf.RTMPTrustedProxies,
-			RunOnConnect:        p.conf.RunOnConnect,
-			RunOnConnectRestart: p.conf.RunOnConnectRestart,
-			RunOnDisconnect:     p.conf.RunOnDisconnect,
-			ExternalCmdPool:     p.externalCmdPool,
-			Metrics:             p.metrics,
-			PathManager:         p.pathManager,
-			Parent:              p,
+			Address:                       p.conf.RTMPSAddress,
+			ReadTimeout:                   p.conf.ReadTimeout,
+			WriteTimeout:                  p.conf.WriteTimeout,
+			Encryption:                    true,
+			ServerCert:                    p.conf.RTMPServerCert,
+			ServerKey:                     p.conf.RTMPServerKey,
+			DumpPackets:                   p.conf.DumpPackets,
+			RTSPAddress:                   p.conf.RTSPAddress,
+			TrustedProxies:                p.conf.RTMPTrustedProxies,
+			MaxUnauthenticatedConnections: p.conf.RTMPMaxUnauthenticatedConnections,
+			RunOnConnect:                  p.conf.RunOnConnect,
+			RunOnConnectRestart:           p.conf.RunOnConnectRestart,
+			RunOnDisconnect:               p.conf.RunOnDisconnect,
+			ExternalCmdPool:               p.externalCmdPool,
+			Metrics:                       p.metrics,
+			PathManager:                   p.pathManager,
+			Parent:                        p,
 		}
 		err = i.Initialize()
 		if err != nil {
@@ -1442,5 +1444,21 @@ func (p *Core) applyConf(newConf *conf.Conf) error {
 	p.internalUserIDs = newIDs
 	p.confMutex.Unlock()
 
-	return p.createResources(false)
+	err = p.createResources(false)
+	if err != nil {
+		return err
+	}
+
+	// The unauthenticated RTMP/RTMPS connection limit is hot-reloadable
+	// without restarting listeners or disconnecting authorized sessions.
+	// Servers that were just recreated already carry the same value; calling
+	// the setter again is harmless.
+	if p.rtmpServer != nil {
+		p.rtmpServer.SetMaxUnauthenticatedConnections(newConf.RTMPMaxUnauthenticatedConnections)
+	}
+	if p.rtmpsServer != nil {
+		p.rtmpsServer.SetMaxUnauthenticatedConnections(newConf.RTMPMaxUnauthenticatedConnections)
+	}
+
+	return nil
 }

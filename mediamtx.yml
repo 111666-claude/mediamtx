@@ -306,6 +306,15 @@ rtmpServerCert: server.crt
 # If the server receives a request from one of these entries, IP in logs
 # and authentication will be taken from the PROXY protocol header.
 rtmpTrustedProxies: []
+# Maximum number of concurrent RTMP/RTMPS connections that have not completed
+# authentication/authorization yet. Admission happens before the handshake,
+# protocol parsing and connection hooks, so slow or unauthorized clients cannot
+# consume resources without bound. Excess connections are closed immediately.
+# Authorized publishers and readers release their slot as soon as they are
+# authenticated and are never disconnected by this limit.
+# The limit is hot-reloadable and applies independently to RTMP and RTMPS.
+# Zero means no limit (default).
+rtmpMaxUnauthenticatedConnections: 0
 
 ###############################################
 # Global settings -> HLS server
