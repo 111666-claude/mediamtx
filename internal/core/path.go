@@ -750,7 +750,7 @@ func (pa *path) doAPIPathsGet(req pathAPIPathsGetReq) {
 				if !pa.isAvailable() {
 					return []defs.APIPathTrack{}
 				}
-				return defs.MediasToTracks(outDesc.Medias)
+				return defs.MediasToTracks(outDesc.Medias, pa.stream.AV1SequenceHeaders())
 			}(),
 			InboundBytes: func() uint64 {
 				if !pa.isAvailable() {

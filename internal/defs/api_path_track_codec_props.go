@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
+	codecsav1 "github.com/bluenviron/mediacommon/v2/pkg/codecs/av1"
 	codecsh264 "github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
 	codecsh265 "github.com/bluenviron/mediacommon/v2/pkg/codecs/h265"
 )
@@ -160,19 +161,37 @@ func h265LevelString(levelIdc uint8) string {
 	return fmt.Sprintf("%.1f", level)
 }
 
-func formatToTrackCodecProps(outFormat format.Format) APIPathTrackCodecProps {
+func formatToTrackCodecProps(
+	outFormat format.Format,
+	av1SequenceHeader *codecsav1.SequenceHeader,
+) APIPathTrackCodecProps {
 	switch outFormat := outFormat.(type) {
 	case *format.AV1:
 		props := &APIPathTrackCodecPropsAV1{}
 
-		if outFormat.Profile != nil {
-			props.Profile = *outFormat.Profile
-		}
-		if outFormat.LevelIdx != nil {
-			props.Level = *outFormat.LevelIdx
-		}
-		if outFormat.Tier != nil {
-			props.Tier = *outFormat.Tier
+		if av1SequenceHeader != nil {
+			props.Width = av1SequenceHeader.Width()
+			props.Height = av1SequenceHeader.Height()
+			props.Profile = int(av1SequenceHeader.SeqProfile)
+			props.Level = int(av1SequenceHeader.SeqLevelIdx[0])
+			props.Tier = func() int {
+				if av1SequenceHeader.SeqTier[0] {
+					return 1
+				}
+				return 0
+			}()
+		} else {
+			// no valid sequence header received yet: fall back to the values
+			// provided by the protocol negotiation, if any
+			if outFormat.Profile != nil {
+				props.Profile = *outFormat.Profile
+			}
+			if outFormat.LevelIdx != nil {
+				props.Level = *outFormat.LevelIdx
+			}
+			if outFormat.Tier != nil {
+				props.Tier = *outFormat.Tier
+			}
 		}
 
 		return props

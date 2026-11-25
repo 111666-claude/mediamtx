@@ -50,15 +50,16 @@ type streamFormat struct {
 	updateOutDesc        func(func())
 	parent               logger.Writer
 
-	outFormat     format.Format
-	forceRemux    bool
-	ptsOffset     int64
-	formatUpdater formatUpdater
-	unitRemuxer   unitRemuxer
-	rtpEncoder    rtpEncoder
-	rtpTimeOffset uint32
-	ntpEstimator  *ntpestimator.Estimator
-	onDatas       map[*Reader]OnDataFunc
+	outFormat       format.Format
+	forceRemux      bool
+	ptsOffset       int64
+	formatUpdater   formatUpdater
+	av1UpdaterState *formatUpdaterAV1State
+	unitRemuxer     unitRemuxer
+	rtpEncoder      rtpEncoder
+	rtpTimeOffset   uint32
+	ntpEstimator    *ntpestimator.Estimator
+	onDatas         map[*Reader]OnDataFunc
 }
 
 func (sf *streamFormat) initialize() error {
@@ -70,7 +71,7 @@ func (sf *streamFormat) initialize() error {
 		sf.forceRemux = true
 	}
 
-	sf.formatUpdater = newFormatUpdater(sf.outFormat)
+	sf.formatUpdater, sf.av1UpdaterState = newFormatUpdater(sf.outFormat)
 	sf.unitRemuxer = newUnitRemuxer(sf.outFormat)
 
 	if sf.replaceNTP {

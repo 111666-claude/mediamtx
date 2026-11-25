@@ -3,6 +3,7 @@ package defs
 import (
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
+	"github.com/bluenviron/mediacommon/v2/pkg/codecs/av1"
 
 	"github.com/bluenviron/mediamtx/internal/formatlabel"
 )
@@ -13,10 +14,10 @@ type APIPathTrack struct {
 	CodecProps APIPathTrackCodecProps `json:"codecProps"`
 }
 
-func formatToTrack(outFormat format.Format) APIPathTrack {
+func formatToTrack(outFormat format.Format, av1SequenceHeader *av1.SequenceHeader) APIPathTrack {
 	return APIPathTrack{
 		Codec:      formatlabel.FormatToLabel(outFormat),
-		CodecProps: formatToTrackCodecProps(outFormat),
+		CodecProps: formatToTrackCodecProps(outFormat, av1SequenceHeader),
 	}
 }
 
@@ -40,17 +41,24 @@ func gatherFormats(medias []*description.Media) []format.Format {
 	return formats
 }
 
-func formatsToTracks(outFormats []format.Format) []APIPathTrack {
+// MediasToTracks returns tracks of given medias.
+// av1SequenceHeaders contains the last valid AV1 sequence headers,
+// indexed by media index and format index.
+func MediasToTracks(
+	outMedias []*description.Media,
+	av1SequenceHeaders map[[2]int]*av1.SequenceHeader,
+) []APIPathTrack {
+	outFormats := gatherFormats(outMedias)
 	ret := make([]APIPathTrack, len(outFormats))
 
-	for i, outFormat := range outFormats {
-		ret[i] = formatToTrack(outFormat)
+	i := 0
+
+	for mediaIdx, media := range outMedias {
+		for formatIdx, outFormat := range media.Formats {
+			ret[i] = formatToTrack(outFormat, av1SequenceHeaders[[2]int{mediaIdx, formatIdx}])
+			i++
+		}
 	}
 
 	return ret
-}
-
-// MediasToTracks returns tracks of given medias.
-func MediasToTracks(outMedias []*description.Media) []APIPathTrack {
-	return formatsToTracks(gatherFormats(outMedias))
 }

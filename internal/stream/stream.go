@@ -11,6 +11,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
+	"github.com/bluenviron/mediacommon/v2/pkg/codecs/av1"
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4audio"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/mp4/codecs"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/pmp4"
@@ -548,6 +549,38 @@ func (s *Stream) OutDescCopy() *description.Session {
 	defer s.outDescMutex.RUnlock()
 
 	return cloneDesc(s.outDesc)
+}
+
+// AV1SequenceHeaders returns the last valid AV1 sequence headers,
+// indexed by media index and format index in the output description.
+// Formats without a valid sequence header are omitted.
+func (s *Stream) AV1SequenceHeaders() map[[2]int]*av1.SequenceHeader {
+	s.outDescMutex.RLock()
+	defer s.outDescMutex.RUnlock()
+
+	ret := make(map[[2]int]*av1.SequenceHeader)
+
+	for mediaIdx, outMedia := range s.outDesc.Medias {
+		for _, sm := range s.medias {
+			if sm.outMedia != outMedia {
+				continue
+			}
+
+			for formatIdx, outFormat := range outMedia.Formats {
+				for _, sf := range sm.formats {
+					if sf.outFormat != outFormat || sf.av1UpdaterState == nil {
+						continue
+					}
+
+					if sh := sf.av1UpdaterState.sequenceHeader.Load(); sh != nil {
+						ret[[2]int{mediaIdx, formatIdx}] = sh
+					}
+				}
+			}
+		}
+	}
+
+	return ret
 }
 
 func (s *Stream) updateOutDesc(update func()) {

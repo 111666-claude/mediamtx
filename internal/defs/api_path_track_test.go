@@ -36,7 +36,7 @@ func TestMediasToTracksMPEG4AudioChannelCount(t *testing.T) {
 					IndexLength:      3,
 					IndexDeltaLength: 3,
 				}},
-			}})
+			}}, nil)
 
 			require.Equal(t, []defs.APIPathTrack{{
 				Codec: formatlabel.MPEG4Audio,
