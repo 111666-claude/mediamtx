@@ -205,7 +205,7 @@ func (s *Server) onListenError(ctx context.Context, err error) {
 }
 
 func (s *Server) createAutomaticMuxerLocked(pa defs.Path) {
-	if s.AlwaysRemux && !pa.SafeConf().SourceOnDemand {
+	if s.AlwaysRemux && !pa.SafeConf().HasOnDemandStaticSource() {
 		if _, ok := s.muxers[pa.Name()]; !ok {
 			s.createMuxerLocked(pa.Name(), nil)
 		}

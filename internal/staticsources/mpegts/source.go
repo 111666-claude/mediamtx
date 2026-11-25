@@ -40,6 +40,9 @@ func (s *Source) Log(level logger.Level, format string, args ...any) {
 	s.Parent.Log(level, "[MPEG-TS source] "+format, args...)
 }
 
+// NotifiesReady implements staticsources.staticSourceReadyNotifier.
+func (*Source) NotifiesReady() {}
+
 // Info returns runtime information.
 func (*Source) Info() defs.StaticSourceInfo {
 	return defs.StaticSourceInfo{}
@@ -49,8 +52,15 @@ func (*Source) Info() defs.StaticSourceInfo {
 func (s *Source) Run(params defs.StaticSourceRunParams) error {
 	s.Log(logger.Debug, "connecting")
 
+	notifyReady := func() {
+		if params.OnReady != nil {
+			params.OnReady()
+		}
+	}
+
 	u, err := url.Parse(params.ResolvedSource)
 	if err != nil {
+		notifyReady()
 		return err
 	}
 
@@ -79,8 +89,10 @@ func (s *Source) Run(params defs.StaticSourceRunParams) error {
 
 		err = l.Initialize()
 		if err != nil {
+			notifyReady()
 			return err
 		}
+		notifyReady()
 		nc = l
 
 	default:
@@ -123,8 +135,10 @@ func (s *Source) Run(params defs.StaticSourceRunParams) error {
 
 		err = l.Initialize()
 		if err != nil {
+			notifyReady()
 			return err
 		}
+		notifyReady()
 		nc = l
 	}
 

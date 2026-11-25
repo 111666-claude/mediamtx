@@ -260,7 +260,7 @@ func (pa *path) run() {
 		}
 		pa.source.(*staticsources.Handler).Initialize()
 
-		if !pa.conf.SourceOnDemand {
+		if !pa.conf.HasOnDemandStaticSource() {
 			pa.source.(*staticsources.Handler).Start(false, "")
 		}
 	}
@@ -296,7 +296,7 @@ func (pa *path) run() {
 
 	if pa.source != nil {
 		if source, ok := pa.source.(*staticsources.Handler); ok {
-			if !pa.conf.SourceOnDemand || pa.onDemandStaticSourceState != pathOnDemandStateInitial {
+			if !pa.conf.HasOnDemandStaticSource() || pa.onDemandStaticSourceState != pathOnDemandStateInitial {
 				source.Close("path is closing")
 			}
 		} else if source, ok2 := pa.source.(defs.Publisher); ok2 {
@@ -839,17 +839,30 @@ func (pa *path) shouldClose() bool {
 }
 
 func (pa *path) onDemandStaticSourceStart(query string) {
+	// start the static source (and bind its listener) before launching the
+	// command, so packets sent by the upstream triggered by runOnDemand are
+	// not missed.
 	pa.source.(*staticsources.Handler).Start(true, query)
 
+	if pa.conf.RunOnDemand != "" || pa.conf.RunOnUnDemand != "" {
+		pa.onUnDemandHook = hooks.OnDemand(hooks.OnDemandParams{
+			Logger:          pa,
+			ExternalCmdPool: pa.externalCmdPool,
+			Conf:            pa.conf,
+			ExternalCmdEnv:  pa.ExternalCmdEnv(),
+			Query:           query,
+		})
+	}
+
 	pa.onDemandStaticSourceReadyTimer.Stop()
-	pa.onDemandStaticSourceReadyTimer = time.NewTimer(time.Duration(pa.conf.SourceOnDemandStartTimeout))
+	pa.onDemandStaticSourceReadyTimer = time.NewTimer(pa.conf.OnDemandStaticSourceStartTimeout())
 
 	pa.onDemandStaticSourceState = pathOnDemandStateWaitingReady
 }
 
 func (pa *path) onDemandStaticSourceScheduleClose() {
 	pa.onDemandStaticSourceCloseTimer.Stop()
-	pa.onDemandStaticSourceCloseTimer = time.NewTimer(time.Duration(pa.conf.SourceOnDemandCloseAfter))
+	pa.onDemandStaticSourceCloseTimer = time.NewTimer(pa.conf.OnDemandStaticSourceCloseAfter())
 
 	pa.onDemandStaticSourceState = pathOnDemandStateClosing
 }
@@ -861,6 +874,11 @@ func (pa *path) onDemandStaticSourceStop(reason string) {
 	}
 
 	pa.onDemandStaticSourceState = pathOnDemandStateInitial
+
+	if pa.onUnDemandHook != nil {
+		pa.onUnDemandHook(reason)
+		pa.onUnDemandHook = nil
+	}
 
 	pa.source.(*staticsources.Handler).Stop(reason)
 }

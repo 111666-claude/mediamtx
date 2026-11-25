@@ -807,7 +807,7 @@ func (pconf *Path) validate(
 		if pconf.Source == "publisher" {
 			return fmt.Errorf("'sourceOnDemand' is useless when source is 'publisher'")
 		}
-	} else {
+	} else if pconf.RunOnDemand == "" {
 		if pconf.Source != "publisher" && pconf.Source != "redirect" && pconf.Regexp != nil {
 			return fmt.Errorf("a path with a regular expression (or path 'all_others') and a static source" +
 				" must have 'sourceOnDemand' set to true")
@@ -1002,8 +1002,9 @@ func (pconf *Path) validate(
 		pconf.RunOnUnavailable = *pconf.RunOnNotReady
 	}
 
-	if (pconf.RunOnDemand != "" || pconf.RunOnUnDemand != "") && pconf.Source != "publisher" {
-		return fmt.Errorf("'runOnDemand' and 'runOnUnDemand' can be used only when source is 'publisher'")
+	if (pconf.RunOnDemand != "" || pconf.RunOnUnDemand != "") &&
+		pconf.Source != "publisher" && !pconf.HasStaticSource() {
+		return fmt.Errorf("'runOnDemand' and 'runOnUnDemand' can be used only when source is 'publisher' or a static source")
 	}
 
 	return nil
@@ -1020,11 +1021,40 @@ func (pconf Path) HasStaticSource() bool {
 }
 
 // HasOnDemandStaticSource checks whether the path has a on demand static source.
+// A runOnDemand command implicitly makes a static source on demand: the command
+// is started by the first reader and the source listener is released when the
+// last reader leaves.
 func (pconf Path) HasOnDemandStaticSource() bool {
-	return pconf.HasStaticSource() && pconf.SourceOnDemand
+	return pconf.HasStaticSource() && (pconf.SourceOnDemand || pconf.RunOnDemand != "")
 }
 
 // HasOnDemandPublisher checks whether the path has a on-demand publisher.
 func (pconf Path) HasOnDemandPublisher() bool {
 	return pconf.RunOnDemand != ""
+}
+
+// OnDemandStaticSourceStartTimeout returns the timeout used to wait for an
+// on-demand static source to become ready. When runOnDemand is set, both the
+// source and the command share the shortest configured start timeout.
+func (pconf Path) OnDemandStaticSourceStartTimeout() time.Duration {
+	d := time.Duration(pconf.SourceOnDemandStartTimeout)
+	if pconf.RunOnDemand != "" {
+		if d2 := time.Duration(pconf.RunOnDemandStartTimeout); d2 < d {
+			d = d2
+		}
+	}
+	return d
+}
+
+// OnDemandStaticSourceCloseAfter returns the idle delay after which an
+// on-demand static source and its runOnDemand command are stopped. It takes
+// the shortest between sourceOnDemandCloseAfter and runOnDemandCloseAfter.
+func (pconf Path) OnDemandStaticSourceCloseAfter() time.Duration {
+	d := time.Duration(pconf.SourceOnDemandCloseAfter)
+	if pconf.RunOnDemand != "" {
+		if d2 := time.Duration(pconf.RunOnDemandCloseAfter); d2 < d {
+			d = d2
+		}
+	}
+	return d
 }

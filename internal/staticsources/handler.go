@@ -54,6 +54,14 @@ type staticSource interface {
 	Info() defs.StaticSourceInfo
 }
 
+// staticSourceReadyNotifier is implemented by static sources that invoke
+// defs.StaticSourceRunParams.OnReady once their listener is bound. Start()
+// waits for such notification before returning, so a runOnDemand command can
+// be launched only after the source is actually listening.
+type staticSourceReadyNotifier interface {
+	NotifiesReady()
+}
+
 type handlerPathManager interface {
 	AddReader(req defs.PathAddReaderReq) (*defs.PathAddReaderRes, error)
 }
@@ -89,6 +97,9 @@ type Handler struct {
 	mutex     sync.RWMutex
 	state     defs.APIStaticSourceState
 	lastError string
+
+	readyCh   chan struct{}
+	readyOnce sync.Once
 
 	// in
 	chReloadConf          chan *conf.Path
@@ -210,6 +221,8 @@ func (s *Handler) Start(onDemand bool, query string) {
 	s.query = query
 	s.ctx, s.ctxCancel = context.WithCancel(context.Background())
 	s.done = make(chan struct{})
+	s.readyCh = make(chan struct{})
+	s.readyOnce = sync.Once{}
 
 	s.instance.Log(logger.Info, "started%s",
 		func() string {
@@ -220,6 +233,22 @@ func (s *Handler) Start(onDemand bool, query string) {
 		}())
 
 	go s.run()
+
+	// When the source is able to signal it, wait until its listener is bound
+	// before returning. This guarantees that a runOnDemand command launched
+	// right after Start() cannot send packets into a not-yet-bound socket.
+	if _, ok := s.instance.(staticSourceReadyNotifier); ok {
+		select {
+		case <-s.readyCh:
+		case <-s.ctx.Done():
+		}
+	}
+}
+
+func (s *Handler) signalReady() {
+	s.readyOnce.Do(func() {
+		close(s.readyCh)
+	})
 }
 
 // Stop stops Handler.
@@ -271,6 +300,7 @@ func (s *Handler) run() {
 				ResolvedSource: resolvedSource,
 				Conf:           s.Conf,
 				ReloadConf:     runReloadConf,
+				OnReady:        s.signalReady,
 			})
 		}()
 	}

@@ -783,6 +783,12 @@ pathDefaults:
   # Command to run when this path is requested by a reader
   # and no one is publishing to this path yet.
   # This can be used to publish a stream on demand.
+  # It can also be used together with an on-demand static source (for
+  # instance "source: udp://0.0.0.0:8000"): the static source is started and
+  # bound first, then the command is launched to tell the upstream to send
+  # packets, readers wait for the source to become ready, and both the command
+  # and the source listener are stopped when the last reader leaves. Setting
+  # this implicitly enables on-demand behavior for the static source.
   # This is terminated with SIGINT when there are no readers anymore.
   # The following environment variables are available:
   # * MTX_PATH: path name
