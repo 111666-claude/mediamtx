@@ -28,6 +28,34 @@ func formatLPCMConfig(f *format.LPCM) string {
 		f.BitDepth, f.SampleRate, f.ChannelCount)
 }
 
+// mediaIsGeneric returns true when a media only contains generic (data) formats.
+func mediaIsGeneric(medi *description.Media) bool {
+	if len(medi.Formats) == 0 {
+		return false
+	}
+
+	for _, forma := range medi.Formats {
+		if _, ok := forma.(*format.Generic); !ok {
+			return false
+		}
+	}
+
+	return true
+}
+
+// filterGenericMedias removes medias that only contain generic (data) formats.
+func filterGenericMedias(medias []*description.Media) []*description.Media {
+	out := make([]*description.Media, 0, len(medias))
+
+	for _, medi := range medias {
+		if !mediaIsGeneric(medi) {
+			out = append(out, medi)
+		}
+	}
+
+	return out
+}
+
 func mediasAreCompatible(medias1 []*description.Media, medias2 []*description.Media) error {
 	if len(medias1) != len(medias2) {
 		return fmt.Errorf("wants to publish %v, but stream expects %v",
@@ -96,6 +124,8 @@ type SubStream struct {
 
 // Initialize initializes the SubStream.
 func (ss *SubStream) Initialize() error {
+	var inMedias []*description.Media
+
 	if !ss.Stream.AlwaysAvailable {
 		if ss.Stream.subStream != nil {
 			panic("should not happen")
@@ -104,24 +134,31 @@ func (ss *SubStream) Initialize() error {
 		if ss.InDesc != nil {
 			panic("should not happen")
 		}
+
+		ss.InDesc = ss.Stream.OrigDesc
+		inMedias = ss.InDesc.Medias
 	} else {
 		if ss.InDesc == nil {
 			panic("should not happen")
 		}
 
-		err := mediasAreCompatible(ss.Stream.OrigDesc.Medias, ss.InDesc.Medias)
+		inMedias = ss.InDesc.Medias
+
+		if ss.Stream.AlwaysAvailableIgnoreGenericTracks {
+			// ignore additional generic (data) tracks of the source,
+			// that are not part of the declared tracks.
+			inMedias = filterGenericMedias(inMedias)
+		}
+
+		err := mediasAreCompatible(ss.Stream.OrigDesc.Medias, inMedias)
 		if err != nil {
 			return err
 		}
 	}
 
-	if !ss.Stream.AlwaysAvailable {
-		ss.InDesc = ss.Stream.OrigDesc
-	}
-
 	ss.medias = make(map[*description.Media]*subStreamMedia)
 
-	for i, inMedia := range ss.InDesc.Medias {
+	for i, inMedia := range inMedias {
 		origMedia := ss.Stream.OrigDesc.Medias[i]
 
 		ssm := &subStreamMedia{
@@ -174,7 +211,14 @@ func (ss *SubStream) WriteUnit(inMedia *description.Media, inFormat format.Forma
 		return
 	}
 
-	ssm := ss.medias[inMedia]
+	ssm, ok := ss.medias[inMedia]
+	if !ok {
+		// the media is not part of the sub stream:
+		// this happens with generic (data) tracks ignored through
+		// alwaysAvailableIgnoreGenericTracks.
+		return
+	}
+
 	ssf := ssm.formats[inFormat]
 
 	ssf.writeUnit(u)

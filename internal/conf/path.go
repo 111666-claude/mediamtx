@@ -230,10 +230,11 @@ type Path struct {
 	UseAbsoluteTimestamp       bool     `json:"useAbsoluteTimestamp"`
 
 	// Always available
-	AlwaysAvailable         bool                   `json:"alwaysAvailable"`
-	AlwaysAvailableTracks   []AlwaysAvailableTrack `json:"alwaysAvailableTracks"`
-	AlwaysAvailableFile     string                 `json:"alwaysAvailableFile"`
-	AlwaysAvailableRecorded bool                   `json:"alwaysAvailableRecorded"`
+	AlwaysAvailable                    bool                   `json:"alwaysAvailable"`
+	AlwaysAvailableTracks              []AlwaysAvailableTrack `json:"alwaysAvailableTracks"`
+	AlwaysAvailableFile                string                 `json:"alwaysAvailableFile"`
+	AlwaysAvailableRecorded            bool                   `json:"alwaysAvailableRecorded"`
+	AlwaysAvailableIgnoreGenericTracks bool                   `json:"alwaysAvailableIgnoreGenericTracks"`
 
 	// Forward
 	Forward Forward `json:"forward"`
@@ -865,6 +866,8 @@ func (pconf *Path) validate(
 		if pconf.UseAbsoluteTimestamp {
 			return fmt.Errorf("'useAbsoluteTimestamp' cannot be used with 'alwaysAvailable'")
 		}
+	} else if pconf.AlwaysAvailableIgnoreGenericTracks {
+		return fmt.Errorf("'alwaysAvailableIgnoreGenericTracks' cannot be used without 'alwaysAvailable'")
 	}
 
 	// Record

@@ -284,10 +284,13 @@ type Stream struct {
 	AlwaysAvailable       bool
 	AlwaysAvailableTracks []conf.AlwaysAvailableTrack
 	AlwaysAvailableFile   string
-	WriteQueueSize        int
-	RTPMaxPayloadSize     int
-	ReplaceNTP            bool
-	Parent                logger.Writer
+	// AlwaysAvailableIgnoreGenericTracks allows sources to have
+	// additional generic (data) tracks beside the declared ones.
+	AlwaysAvailableIgnoreGenericTracks bool
+	WriteQueueSize                     int
+	RTPMaxPayloadSize                  int
+	ReplaceNTP                         bool
+	Parent                             logger.Writer
 
 	outDescMutex sync.RWMutex
 	outDesc      *description.Session

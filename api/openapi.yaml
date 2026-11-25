@@ -1041,6 +1041,8 @@ components:
           description: Always available
         alwaysAvailableFile:
           type: string
+        alwaysAvailableIgnoreGenericTracks:
+          type: boolean
         alwaysAvailableRecorded:
           type: boolean
         alwaysAvailableTracks:

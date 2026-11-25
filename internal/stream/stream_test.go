@@ -1005,3 +1005,260 @@ func TestStreamAlwaysAvailableConcurrentReaders(t *testing.T) {
 	close(done)
 	readersWG.Wait()
 }
+
+func TestStreamAlwaysAvailableIgnoreGenericTracks(t *testing.T) {
+	newH265Media := func() *description.Media {
+		return &description.Media{
+			Type:    description.MediaTypeVideo,
+			Formats: []format.Format{&format.H265{PayloadTyp: 96}},
+		}
+	}
+
+	newG711Media := func() *description.Media {
+		return &description.Media{
+			Type: description.MediaTypeAudio,
+			Formats: []format.Format{&format.G711{
+				PayloadTyp:   0,
+				MULaw:        true,
+				SampleRate:   8000,
+				ChannelCount: 1,
+			}},
+		}
+	}
+
+	newGenericMedia := func() *description.Media {
+		return &description.Media{
+			Type:    description.MediaTypeApplication,
+			Formats: []format.Format{&format.Generic{PayloadTyp: 96, RTPMa: "private/90000"}},
+		}
+	}
+
+	newStream := func(t *testing.T, ignoreGenericTracks bool) *Stream {
+		t.Helper()
+
+		strm := &Stream{
+			AlwaysAvailable: true,
+			AlwaysAvailableTracks: []conf.AlwaysAvailableTrack{
+				{Codec: conf.CodecH265},
+				{Codec: conf.CodecG711, MULaw: true, SampleRate: 8000, ChannelCount: 1},
+			},
+			AlwaysAvailableIgnoreGenericTracks: ignoreGenericTracks,
+			WriteQueueSize:                     512,
+			RTPMaxPayloadSize:                  1450,
+			ReplaceNTP:                         true,
+			Parent:                             &nilLogger{},
+		}
+		err := strm.Initialize()
+		require.NoError(t, err)
+		t.Cleanup(strm.Close)
+
+		return strm
+	}
+
+	t.Run("extra generic track", func(t *testing.T) {
+		strm := newStream(t, true)
+
+		recvH265 := make(chan unit.PayloadH265, 10)
+		recvG711 := make(chan unit.PayloadG711, 10)
+
+		r := &Reader{Parent: &nilLogger{}}
+
+		// the offline sub stream sends units too: forward only the sentinel payloads
+		r.OnData(strm.OrigDesc.Medias[0], strm.OrigDesc.Medias[0].Formats[0], func(u *unit.Unit) error {
+			if payload, ok := u.Payload.(unit.PayloadH265); ok && len(payload) == 1 && len(payload[0]) == 4 &&
+				(payload[0][0] == 1 || payload[0][0] == 9) {
+				select {
+				case recvH265 <- payload:
+				default:
+				}
+			}
+			return nil
+		})
+
+		r.OnData(strm.OrigDesc.Medias[1], strm.OrigDesc.Medias[1].Formats[0], func(u *unit.Unit) error {
+			if payload, ok := u.Payload.(unit.PayloadG711); ok && len(payload) == 4 &&
+				(payload[0] == 5 || payload[0] == 13) {
+				select {
+				case recvG711 <- payload:
+				default:
+				}
+			}
+			return nil
+		})
+
+		strm.AddReader(r)
+		defer strm.RemoveReader(r)
+
+		newSubStream := func() *SubStream {
+			subStream := &SubStream{
+				Stream: strm,
+				InDesc: &description.Session{Medias: []*description.Media{
+					newH265Media(),
+					newGenericMedia(),
+					newG711Media(),
+				}},
+				UseRTPPackets: false,
+			}
+			err := subStream.Initialize()
+			require.NoError(t, err)
+			return subStream
+		}
+
+		writeUnits := func(subStream *SubStream, h265Payload unit.PayloadH265, g711Payload unit.PayloadG711) {
+			// units of the generic track must be silently discarded
+			subStream.WriteUnit(subStream.InDesc.Medias[1], subStream.InDesc.Medias[1].Formats[0], &unit.Unit{
+				PTS:     0,
+				Payload: unit.PayloadG711{1, 2, 3, 4},
+			})
+
+			subStream.WriteUnit(subStream.InDesc.Medias[0], subStream.InDesc.Medias[0].Formats[0], &unit.Unit{
+				PTS:     0,
+				Payload: h265Payload,
+			})
+
+			subStream.WriteUnit(subStream.InDesc.Medias[2], subStream.InDesc.Medias[2].Formats[0], &unit.Unit{
+				PTS:     0,
+				Payload: g711Payload,
+			})
+		}
+
+		subStream := newSubStream()
+		writeUnits(subStream, unit.PayloadH265{{1, 2, 3, 4}}, unit.PayloadG711{5, 6, 7, 8})
+
+		require.Equal(t, unit.PayloadH265{{1, 2, 3, 4}}, <-recvH265)
+		require.Equal(t, unit.PayloadG711{5, 6, 7, 8}, <-recvG711)
+
+		// simulate a source reconnection: the track mapping must stay stable
+		subStream = newSubStream()
+		writeUnits(subStream, unit.PayloadH265{{9, 10, 11, 12}}, unit.PayloadG711{13, 14, 15, 16})
+
+		require.Equal(t, unit.PayloadH265{{9, 10, 11, 12}}, <-recvH265)
+		require.Equal(t, unit.PayloadG711{13, 14, 15, 16}, <-recvG711)
+	})
+
+	t.Run("errors", func(t *testing.T) {
+		for _, ca := range []struct {
+			name               string
+			ignoreGenericTrack bool
+			desc               *description.Session
+			err                string
+		}{
+			{
+				"missing required track",
+				true,
+				&description.Session{Medias: []*description.Media{
+					{
+						Type:    description.MediaTypeVideo,
+						Formats: []format.Format{&format.H265{PayloadTyp: 96}},
+					},
+					{
+						Type:    description.MediaTypeApplication,
+						Formats: []format.Format{&format.Generic{PayloadTyp: 96, RTPMa: "private/90000"}},
+					},
+				}},
+				"wants to publish [H265], but stream expects [H265 G711]",
+			},
+			{
+				"codec mismatch",
+				true,
+				&description.Session{Medias: []*description.Media{
+					{
+						Type:    description.MediaTypeVideo,
+						Formats: []format.Format{&format.H264{PayloadTyp: 96}},
+					},
+					{
+						Type: description.MediaTypeAudio,
+						Formats: []format.Format{&format.G711{
+							PayloadTyp:   0,
+							MULaw:        true,
+							SampleRate:   8000,
+							ChannelCount: 1,
+						}},
+					},
+				}},
+				"wants to publish [H264 G711], but stream expects [H265 G711]",
+			},
+			{
+				"g711 config mismatch",
+				true,
+				&description.Session{Medias: []*description.Media{
+					{
+						Type:    description.MediaTypeVideo,
+						Formats: []format.Format{&format.H265{PayloadTyp: 96}},
+					},
+					{
+						Type: description.MediaTypeAudio,
+						Formats: []format.Format{&format.G711{
+							PayloadTyp:   8,
+							MULaw:        false,
+							SampleRate:   8000,
+							ChannelCount: 1,
+						}},
+					},
+				}},
+				"G711 configuration does not match, is MULaw=false, sampleRate=8000, " +
+					"channelCount=1, but stream expects MULaw=true, sampleRate=8000, channelCount=1",
+			},
+			{
+				"extra non-generic track",
+				true,
+				&description.Session{Medias: []*description.Media{
+					{
+						Type:    description.MediaTypeVideo,
+						Formats: []format.Format{&format.H265{PayloadTyp: 96}},
+					},
+					{
+						Type: description.MediaTypeAudio,
+						Formats: []format.Format{&format.G711{
+							PayloadTyp:   0,
+							MULaw:        true,
+							SampleRate:   8000,
+							ChannelCount: 1,
+						}},
+					},
+					{
+						Type:    description.MediaTypeVideo,
+						Formats: []format.Format{&format.H264{PayloadTyp: 96}},
+					},
+				}},
+				"wants to publish [H265 G711 H264], but stream expects [H265 G711]",
+			},
+			{
+				"generic track rejected without option",
+				false,
+				&description.Session{Medias: []*description.Media{
+					{
+						Type:    description.MediaTypeVideo,
+						Formats: []format.Format{&format.H265{PayloadTyp: 96}},
+					},
+					{
+						Type:    description.MediaTypeApplication,
+						Formats: []format.Format{&format.Generic{PayloadTyp: 96, RTPMa: "private/90000"}},
+					},
+					{
+						Type: description.MediaTypeAudio,
+						Formats: []format.Format{&format.G711{
+							PayloadTyp:   0,
+							MULaw:        true,
+							SampleRate:   8000,
+							ChannelCount: 1,
+						}},
+					},
+				}},
+				"wants to publish [H265 Generic G711], but stream expects [H265 G711]",
+			},
+		} {
+			t.Run(ca.name, func(t *testing.T) {
+				strm := newStream(t, ca.ignoreGenericTrack)
+
+				subStream := &SubStream{
+					Stream:        strm,
+					InDesc:        ca.desc,
+					UseRTPPackets: false,
+				}
+				err := subStream.Initialize()
+				require.EqualError(t, err, ca.err)
+			})
+		}
+	})
+}

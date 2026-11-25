@@ -27,6 +27,21 @@ paths:
     alwaysAvailableFile: "./h264.mp4"
 ```
 
+The tracks of a source or publisher must match exactly the ones declared in `alwaysAvailableTracks` (or in `alwaysAvailableFile`), otherwise the source is rejected. Some cameras append additional data tracks (for instance metadata tracks) to their video and audio tracks: these additional tracks can be tolerated by enabling `alwaysAvailableIgnoreGenericTracks`. Declared tracks must still be present and match, while additional generic (data) tracks are ignored:
+
+```yml
+paths:
+  mypath:
+    alwaysAvailable: true
+    alwaysAvailableIgnoreGenericTracks: true
+    alwaysAvailableTracks:
+      - codec: H265
+      - codec: G711
+        sampleRate: 8000
+        channelCount: 1
+        muLaw: true
+```
+
 By default, the stream is recorded even when no source is connected and the offline segment is playing. To record only when a source is connected, set `alwaysAvailableRecorded` to `false`:
 
 ```yml

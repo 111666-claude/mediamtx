@@ -981,6 +981,13 @@ func TestConfErrors(t *testing.T) {
 			"'alwaysAvailableFile' and 'alwaysAvailableTracks' cannot be used together",
 		},
 		{
+			"alwaysAvailableIgnoreGenericTracks without alwaysAvailable",
+			"paths:\n" +
+				"  mypath:\n" +
+				"    alwaysAvailableIgnoreGenericTracks: yes\n",
+			"'alwaysAvailableIgnoreGenericTracks' cannot be used without 'alwaysAvailable'",
+		},
+		{
 			"alwaysAvailableTracks g711 sampleRate too low",
 			"paths:\n" +
 				"  mypath:\n" +
