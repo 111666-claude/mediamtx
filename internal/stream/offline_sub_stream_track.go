@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -14,8 +15,10 @@ import (
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/av1"
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4audio"
+	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4"
 	mcodecs "github.com/bluenviron/mediacommon/v2/pkg/formats/mp4/codecs"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/pmp4"
+	"github.com/bluenviron/mediamtx/internal/mp4box"
 	"github.com/bluenviron/mediamtx/internal/unit"
 )
 
@@ -246,6 +249,26 @@ func (t *offlineSubStreamTrack) run() {
 }
 
 func (t *offlineSubStreamTrack) runFile(r io.ReadSeeker, pos int) error {
+	fragmented, err := mp4box.IsFragmented(r)
+	if err != nil {
+		return err
+	}
+
+	if fragmented {
+		return t.runFMP4File(r, pos)
+	}
+
+	return t.runPMP4File(r, pos)
+}
+
+// offlineFileSample is a sample of either a regular MP4 or a fragmented MP4.
+type offlineFileSample struct {
+	duration   uint32
+	ptsOffset  int32
+	getPayload func() ([]byte, error)
+}
+
+func (t *offlineSubStreamTrack) runPMP4File(r io.ReadSeeker, pos int) error {
 	var presentation pmp4.Presentation
 	err := presentation.Unmarshal(r)
 	if err != nil {
@@ -253,91 +276,99 @@ func (t *offlineSubStreamTrack) runFile(r io.ReadSeeker, pos int) error {
 	}
 
 	track := presentation.Tracks[pos]
+
+	samples := make([]*offlineFileSample, len(track.Samples))
+	for i, sample := range track.Samples {
+		samples[i] = &offlineFileSample{
+			duration:   sample.Duration,
+			ptsOffset:  sample.PTSOffset,
+			getPayload: sample.GetPayload,
+		}
+	}
+
+	return t.runSampleTrack(track.Codec, track.TimeScale, samples)
+}
+
+func (t *offlineSubStreamTrack) runFMP4File(r io.ReadSeeker, pos int) error {
+	byts, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+
+	var init fmp4.Init
+	err = init.Unmarshal(bytes.NewReader(byts))
+	if err != nil {
+		return err
+	}
+
+	if pos >= len(init.Tracks) {
+		return fmt.Errorf("fragmented MP4 track %d not found", pos+1)
+	}
+
+	track := init.Tracks[pos]
+
+	var parts fmp4.Parts
+	err = parts.Unmarshal(byts)
+	if err != nil {
+		return err
+	}
+
+	samples := make([]*offlineFileSample, 0)
+
+	// Part tracks are not stored in a stable order, so match them by ID.
+	// Fragment base times are not used: the timeline is rebuilt from sample
+	// durations, starting at zero, in order to be continuous across loops.
+	for _, part := range parts {
+		for _, partTrack := range part.Tracks {
+			if partTrack.ID != track.ID {
+				continue
+			}
+
+			for _, sample := range partTrack.Samples {
+				payload := sample.Payload
+				samples = append(samples, &offlineFileSample{
+					duration:  sample.Duration,
+					ptsOffset: sample.PTSOffset,
+					getPayload: func() ([]byte, error) {
+						return payload, nil
+					},
+				})
+			}
+		}
+	}
+
+	if len(samples) == 0 {
+		return fmt.Errorf("fragmented MP4 track %d does not contain any sample", track.ID)
+	}
+
+	return t.runSampleTrack(track.Codec, track.TimeScale, samples)
+}
+
+func (t *offlineSubStreamTrack) runSampleTrack(
+	codec mcodecs.Codec,
+	timeScale uint32,
+	samples []*offlineFileSample,
+) error {
 	var dts int64
 	startSystemTime := time.Now()
 
 	for {
-		for _, sample := range track.Samples {
-			var payload []byte
-			payload, err = sample.GetPayload()
+		for _, sample := range samples {
+			payload, err := sample.getPayload()
 			if err != nil {
 				return err
 			}
 
-			pts := dts + int64(sample.PTSOffset)
-			ptsFormat := multiplyAndDivide(pts, int64(t.format.ClockRate()), int64(track.TimeScale))
+			pts := dts + int64(sample.ptsOffset)
+			ptsFormat := multiplyAndDivide(pts, int64(t.format.ClockRate()), int64(timeScale))
 
-			switch track.Codec.(type) {
-			case *mcodecs.AV1:
-				var bs av1.Bitstream
-				err = bs.Unmarshal(payload)
-				if err != nil {
-					return err
-				}
-
-				t.subStream.WriteUnit(t.media, t.format, &unit.Unit{
-					PTS:     ptsFormat,
-					NTP:     time.Time{},
-					Payload: unit.PayloadAV1(bs),
-				})
-
-			case *mcodecs.VP9:
-				t.subStream.WriteUnit(t.media, t.format, &unit.Unit{
-					PTS:     ptsFormat,
-					NTP:     time.Time{},
-					Payload: unit.PayloadVP9(payload),
-				})
-
-			case *mcodecs.H265:
-				var avcc h264.AVCC
-				err = avcc.Unmarshal(payload)
-				if err != nil {
-					return err
-				}
-
-				t.subStream.WriteUnit(t.media, t.format, &unit.Unit{
-					PTS:     ptsFormat,
-					NTP:     time.Time{},
-					Payload: unit.PayloadH265(avcc),
-				})
-
-			case *mcodecs.H264:
-				var avcc h264.AVCC
-				err = avcc.Unmarshal(payload)
-				if err != nil {
-					return err
-				}
-
-				t.subStream.WriteUnit(t.media, t.format, &unit.Unit{
-					PTS:     ptsFormat,
-					NTP:     time.Time{},
-					Payload: unit.PayloadH264(avcc),
-				})
-
-			case *mcodecs.Opus:
-				t.subStream.WriteUnit(t.media, t.format, &unit.Unit{
-					PTS:     ptsFormat,
-					NTP:     time.Time{},
-					Payload: unit.PayloadOpus([][]byte{payload}),
-				})
-
-			case *mcodecs.MPEG4Audio:
-				t.subStream.WriteUnit(t.media, t.format, &unit.Unit{
-					PTS:     ptsFormat,
-					NTP:     time.Time{},
-					Payload: unit.PayloadMPEG4Audio([][]byte{payload}),
-				})
-
-			case *mcodecs.LPCM:
-				t.subStream.WriteUnit(t.media, t.format, &unit.Unit{
-					PTS:     ptsFormat,
-					NTP:     time.Time{},
-					Payload: unit.PayloadLPCM(payload),
-				})
+			err = t.writeFileSample(codec, payload, ptsFormat)
+			if err != nil {
+				return err
 			}
 
-			dts += int64(sample.Duration)
-			dtsGo := multiplyAndDivide2(time.Duration(dts), time.Second, time.Duration(track.TimeScale))
+			dts += int64(sample.duration)
+			dtsGo := multiplyAndDivide2(time.Duration(dts), time.Second, time.Duration(timeScale))
 			systemTime := startSystemTime.Add(dtsGo)
 
 			if !t.sleep(systemTime) {
@@ -345,6 +376,83 @@ func (t *offlineSubStreamTrack) runFile(r io.ReadSeeker, pos int) error {
 			}
 		}
 	}
+}
+
+func (t *offlineSubStreamTrack) writeFileSample(
+	codec mcodecs.Codec,
+	payload []byte,
+	ptsFormat int64,
+) error {
+	switch codec.(type) {
+	case *mcodecs.AV1:
+		var bs av1.Bitstream
+		err := bs.Unmarshal(payload)
+		if err != nil {
+			return err
+		}
+
+		t.subStream.WriteUnit(t.media, t.format, &unit.Unit{
+			PTS:     ptsFormat,
+			NTP:     time.Time{},
+			Payload: unit.PayloadAV1(bs),
+		})
+
+	case *mcodecs.VP9:
+		t.subStream.WriteUnit(t.media, t.format, &unit.Unit{
+			PTS:     ptsFormat,
+			NTP:     time.Time{},
+			Payload: unit.PayloadVP9(payload),
+		})
+
+	case *mcodecs.H265:
+		var avcc h264.AVCC
+		err := avcc.Unmarshal(payload)
+		if err != nil {
+			return err
+		}
+
+		t.subStream.WriteUnit(t.media, t.format, &unit.Unit{
+			PTS:     ptsFormat,
+			NTP:     time.Time{},
+			Payload: unit.PayloadH265(avcc),
+		})
+
+	case *mcodecs.H264:
+		var avcc h264.AVCC
+		err := avcc.Unmarshal(payload)
+		if err != nil {
+			return err
+		}
+
+		t.subStream.WriteUnit(t.media, t.format, &unit.Unit{
+			PTS:     ptsFormat,
+			NTP:     time.Time{},
+			Payload: unit.PayloadH264(avcc),
+		})
+
+	case *mcodecs.Opus:
+		t.subStream.WriteUnit(t.media, t.format, &unit.Unit{
+			PTS:     ptsFormat,
+			NTP:     time.Time{},
+			Payload: unit.PayloadOpus([][]byte{payload}),
+		})
+
+	case *mcodecs.MPEG4Audio:
+		t.subStream.WriteUnit(t.media, t.format, &unit.Unit{
+			PTS:     ptsFormat,
+			NTP:     time.Time{},
+			Payload: unit.PayloadMPEG4Audio([][]byte{payload}),
+		})
+
+	case *mcodecs.LPCM:
+		t.subStream.WriteUnit(t.media, t.format, &unit.Unit{
+			PTS:     ptsFormat,
+			NTP:     time.Time{},
+			Payload: unit.PayloadLPCM(payload),
+		})
+	}
+
+	return nil
 }
 
 func (t *offlineSubStreamTrack) sleep(systemTime time.Time) bool {

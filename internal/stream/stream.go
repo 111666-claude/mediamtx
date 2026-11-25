@@ -12,6 +12,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4audio"
+	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/mp4/codecs"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/pmp4"
 	"github.com/pion/rtp"
@@ -19,7 +20,89 @@ import (
 	"github.com/bluenviron/mediamtx/internal/conf"
 	"github.com/bluenviron/mediamtx/internal/errordumper"
 	"github.com/bluenviron/mediamtx/internal/logger"
+	"github.com/bluenviron/mediamtx/internal/mp4box"
 )
+
+func mediaFromAlwaysAvailableCodec(trackCodec codecs.Codec) *description.Media {
+	switch codec := trackCodec.(type) {
+	case *codecs.AV1:
+		return &description.Media{
+			Type: description.MediaTypeVideo,
+			Formats: []format.Format{&format.AV1{
+				PayloadTyp: 96,
+			}},
+		}
+
+	case *codecs.VP9:
+		return &description.Media{
+			Type: description.MediaTypeVideo,
+			Formats: []format.Format{&format.VP9{
+				PayloadTyp: 96,
+			}},
+		}
+
+	case *codecs.H265:
+		return &description.Media{
+			Type: description.MediaTypeVideo,
+			Formats: []format.Format{&format.H265{
+				PayloadTyp: 96,
+				VPS:        codec.VPS,
+				SPS:        codec.SPS,
+				PPS:        codec.PPS,
+			}},
+		}
+
+	case *codecs.H264:
+		return &description.Media{
+			Type: description.MediaTypeVideo,
+			Formats: []format.Format{&format.H264{
+				PayloadTyp:        96,
+				PacketizationMode: 1,
+				SPS:               codec.SPS,
+				PPS:               codec.PPS,
+			}},
+		}
+
+	case *codecs.Opus:
+		return &description.Media{
+			Type: description.MediaTypeAudio,
+			Formats: []format.Format{&format.Opus{
+				PayloadTyp:   96,
+				ChannelCount: codec.ChannelCount,
+			}},
+		}
+
+	case *codecs.MPEG4Audio:
+		return &description.Media{
+			Type: description.MediaTypeAudio,
+			Formats: []format.Format{&format.MPEG4Audio{
+				PayloadTyp:       96,
+				SizeLength:       13,
+				IndexLength:      3,
+				IndexDeltaLength: 3,
+				Config: &mpeg4audio.AudioSpecificConfig{
+					Type:          codec.Config.Type,
+					SampleRate:    codec.Config.SampleRate,
+					ChannelConfig: codec.Config.ChannelConfig,
+					ChannelCount:  codec.Config.ChannelCount, //nolint:staticcheck
+				},
+			}},
+		}
+
+	case *codecs.LPCM:
+		return &description.Media{
+			Type: description.MediaTypeAudio,
+			Formats: []format.Format{&format.LPCM{
+				PayloadTyp:   96,
+				BitDepth:     codec.BitDepth,
+				SampleRate:   codec.SampleRate,
+				ChannelCount: codec.ChannelCount,
+			}},
+		}
+	}
+
+	return nil
+}
 
 func mediasFromAlwaysAvailableFile(alwaysAvailableFile string) ([]*description.Media, error) {
 	f, err := os.Open(alwaysAvailableFile)
@@ -28,90 +111,43 @@ func mediasFromAlwaysAvailableFile(alwaysAvailableFile string) ([]*description.M
 	}
 	defer f.Close()
 
-	var presentation pmp4.Presentation
-	err = presentation.Unmarshal(f)
+	fragmented, err := mp4box.IsFragmented(f)
 	if err != nil {
 		return nil, err
 	}
 
+	var trackCodecs []codecs.Codec
+
+	if fragmented {
+		var init fmp4.Init
+		err = init.Unmarshal(f)
+		if err != nil {
+			return nil, err
+		}
+
+		trackCodecs = make([]codecs.Codec, len(init.Tracks))
+		for i, track := range init.Tracks {
+			trackCodecs[i] = track.Codec
+		}
+	} else {
+		var presentation pmp4.Presentation
+		err = presentation.Unmarshal(f)
+		if err != nil {
+			return nil, err
+		}
+
+		trackCodecs = make([]codecs.Codec, len(presentation.Tracks))
+		for i, track := range presentation.Tracks {
+			trackCodecs[i] = track.Codec
+		}
+	}
+
 	var medias []*description.Media
 
-	for _, track := range presentation.Tracks {
-		switch codec := track.Codec.(type) {
-		case *codecs.AV1:
-			medias = append(medias, &description.Media{
-				Type: description.MediaTypeVideo,
-				Formats: []format.Format{&format.AV1{
-					PayloadTyp: 96,
-				}},
-			})
-
-		case *codecs.VP9:
-			medias = append(medias, &description.Media{
-				Type: description.MediaTypeVideo,
-				Formats: []format.Format{&format.VP9{
-					PayloadTyp: 96,
-				}},
-			})
-
-		case *codecs.H265:
-			medias = append(medias, &description.Media{
-				Type: description.MediaTypeVideo,
-				Formats: []format.Format{&format.H265{
-					PayloadTyp: 96,
-					VPS:        codec.VPS,
-					SPS:        codec.SPS,
-					PPS:        codec.PPS,
-				}},
-			})
-
-		case *codecs.H264:
-			medias = append(medias, &description.Media{
-				Type: description.MediaTypeVideo,
-				Formats: []format.Format{&format.H264{
-					PayloadTyp:        96,
-					PacketizationMode: 1,
-					SPS:               codec.SPS,
-					PPS:               codec.PPS,
-				}},
-			})
-
-		case *codecs.Opus:
-			medias = append(medias, &description.Media{
-				Type: description.MediaTypeAudio,
-				Formats: []format.Format{&format.Opus{
-					PayloadTyp:   96,
-					ChannelCount: codec.ChannelCount,
-				}},
-			})
-
-		case *codecs.MPEG4Audio:
-			medias = append(medias, &description.Media{
-				Type: description.MediaTypeAudio,
-				Formats: []format.Format{&format.MPEG4Audio{
-					PayloadTyp:       96,
-					SizeLength:       13,
-					IndexLength:      3,
-					IndexDeltaLength: 3,
-					Config: &mpeg4audio.AudioSpecificConfig{
-						Type:          codec.Config.Type,
-						SampleRate:    codec.Config.SampleRate,
-						ChannelConfig: codec.Config.ChannelConfig,
-						ChannelCount:  codec.Config.ChannelCount, //nolint:staticcheck
-					},
-				}},
-			})
-
-		case *codecs.LPCM:
-			medias = append(medias, &description.Media{
-				Type: description.MediaTypeAudio,
-				Formats: []format.Format{&format.LPCM{
-					PayloadTyp:   96,
-					BitDepth:     codec.BitDepth,
-					SampleRate:   codec.SampleRate,
-					ChannelCount: codec.ChannelCount,
-				}},
-			})
+	for _, trackCodec := range trackCodecs {
+		media := mediaFromAlwaysAvailableCodec(trackCodec)
+		if media != nil {
+			medias = append(medias, media)
 		}
 	}
 

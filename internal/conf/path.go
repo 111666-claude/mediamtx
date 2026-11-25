@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
+	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/mp4/codecs"
 	"github.com/bluenviron/mediacommon/v2/pkg/formats/pmp4"
 	"github.com/bluenviron/mediamtx/internal/logger"
+	"github.com/bluenviron/mediamtx/internal/mp4box"
 )
 
 var (
@@ -105,12 +107,21 @@ func validateURL(source string) (*url.URL, error) {
 }
 
 func checkMP4MagicBytes(f io.ReadSeeker) error {
-	magicBytes := make([]byte, 4)
-
-	_, err := f.Seek(4, io.SeekStart)
+	info, err := f.Seek(0, io.SeekEnd)
 	if err != nil {
 		return err
 	}
+
+	if info == 0 {
+		return fmt.Errorf("file is empty")
+	}
+
+	_, err = f.Seek(4, io.SeekStart)
+	if err != nil {
+		return err
+	}
+
+	magicBytes := make([]byte, 4)
 
 	_, err = io.ReadFull(f, magicBytes)
 	if err != nil {
@@ -129,6 +140,17 @@ func checkMP4MagicBytes(f io.ReadSeeker) error {
 	return nil
 }
 
+func isAlwaysAvailableCodecSupported(trackCodec codecs.Codec) bool {
+	switch trackCodec.(type) {
+	case *codecs.AV1, *codecs.VP9, *codecs.H265, *codecs.H264,
+		*codecs.Opus, *codecs.MPEG4Audio, *codecs.LPCM:
+		return true
+
+	default:
+		return false
+	}
+}
+
 func checkAlwaysAvailableFile(fpath string) error {
 	f, err := os.Open(fpath)
 	if err != nil {
@@ -141,8 +163,21 @@ func checkAlwaysAvailableFile(fpath string) error {
 		return err
 	}
 
+	fragmented, err := mp4box.IsFragmented(f)
+	if err != nil {
+		return err
+	}
+
+	if fragmented {
+		return checkAlwaysAvailableFMP4(f)
+	}
+
+	return checkAlwaysAvailablePMP4(f)
+}
+
+func checkAlwaysAvailablePMP4(f io.ReadSeeker) error {
 	var presentation pmp4.Presentation
-	err = presentation.Unmarshal(f)
+	err := presentation.Unmarshal(f)
 	if err != nil {
 		return err
 	}
@@ -152,10 +187,51 @@ func checkAlwaysAvailableFile(fpath string) error {
 	}
 
 	for _, track := range presentation.Tracks {
-		switch track.Codec.(type) {
-		case *codecs.AV1, *codecs.VP9, *codecs.H265, *codecs.H264, *codecs.Opus, *codecs.MPEG4Audio, *codecs.LPCM:
-		default:
+		if !isAlwaysAvailableCodecSupported(track.Codec) {
 			return fmt.Errorf("unsupported codec %T", track.Codec)
+		}
+	}
+
+	return nil
+}
+
+func checkAlwaysAvailableFMP4(f io.ReadSeeker) error {
+	byts, err := io.ReadAll(f)
+	if err != nil {
+		return err
+	}
+
+	var init fmp4.Init
+	err = init.Unmarshal(bytes.NewReader(byts))
+	if err != nil {
+		return fmt.Errorf("invalid fragmented MP4 file: %w", err)
+	}
+
+	for _, track := range init.Tracks {
+		if !isAlwaysAvailableCodecSupported(track.Codec) {
+			return fmt.Errorf("unsupported codec %T", track.Codec)
+		}
+	}
+
+	var parts fmp4.Parts
+	err = parts.Unmarshal(byts)
+	if err != nil {
+		return fmt.Errorf("invalid fragmented MP4 segment: %w", err)
+	}
+
+	for _, track := range init.Tracks {
+		sampleCount := 0
+
+		for _, part := range parts {
+			for _, partTrack := range part.Tracks {
+				if partTrack.ID == track.ID {
+					sampleCount += len(partTrack.Samples)
+				}
+			}
+		}
+
+		if sampleCount == 0 {
+			return fmt.Errorf("fragmented MP4 track %d does not contain any sample", track.ID)
 		}
 	}
 
