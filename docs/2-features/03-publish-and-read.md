@@ -8,25 +8,29 @@ Streams can also be ingested as _Static sources_, in which _MediaMTX_ acts as th
 
 These are the protocols that are currently supported and their capabilities (publish / static source / read):
 
-- Media-over-QUIC ([publish](../3-publish/01-moq.md), [static source](../4-static-sources/1-moq.md), [read](../5-read/01-moq.md)): a new generation streaming protocol based on QUIC, HTTP/3 and browser APIs. _MediaMTX_ listens for incoming clients on ports `8892/TCP` and `8893/UDP` and is capable of pulling streams from other servers.
+- Media-over-QUIC ([publish](../3-publish/01-moq.md), [static source](../4-static-sources/01-moq.md), [read](../5-read/01-moq.md)): a new generation streaming protocol based on QUIC, HTTP/3 and browser APIs. _MediaMTX_ listens for incoming clients on ports `8892/TCP` and `8893/UDP` and is capable of pulling streams from other servers.
 
-- WebRTC ([publish](../3-publish/03-webrtc.md), [static source](../4-static-sources/3-webrtc.md), [read](../5-read/03-webrtc.md)): a streaming protocol based on a set of ready-to-use browser APIs. _MediaMTX_ listens for incoming clients on ports `8889/TCP`, `8189/UDP` and is capable of pulling streams from other servers.
+- WebRTC ([publish](../3-publish/03-webrtc.md), [static source](../4-static-sources/03-webrtc.md), [read](../5-read/03-webrtc.md)): a streaming protocol based on a set of ready-to-use browser APIs. _MediaMTX_ listens for incoming clients on ports `8889/TCP`, `8189/UDP` and is capable of pulling streams from other servers.
 
-- RTSP ([publish](../3-publish/04-rtsp.md), [static source](../4-static-sources/4-rtsp.md), [read](../5-read/04-rtsp.md)): the streaming protocol used by most IP cameras. _MediaMTX_ listens for incoming clients on port `:8554/TCP` (and uses `:8000/UDP` and `:8001/UDP` under the hood) and is capable of pulling streams from other servers.
+- RTSP ([publish](../3-publish/04-rtsp.md), [static source](../4-static-sources/04-rtsp.md), [read](../5-read/04-rtsp.md)): the streaming protocol used by most IP cameras. _MediaMTX_ listens for incoming clients on port `:8554/TCP` (and uses `:8000/UDP` and `:8001/UDP` under the hood) and is capable of pulling streams from other servers.
 
-- RTMP ([publish](../3-publish/05-rtmp.md), [static source](../4-static-sources/5-rtmp.md), [read](../5-read/05-rtmp.md)): streaming protocol used mostly for publishing live streams to broadcast websites. _MediaMTX_ listens for incoming clients on port `:1935/TCP` and is capable of pulling streams from other servers.
+- RTMP ([publish](../3-publish/05-rtmp.md), [static source](../4-static-sources/05-rtmp.md), [read](../5-read/05-rtmp.md)): streaming protocol used mostly for publishing live streams to broadcast websites. _MediaMTX_ listens for incoming clients on port `:1935/TCP` and is capable of pulling streams from other servers.
 
-- SRT ([publish](../3-publish/02-srt.md), [static source](../4-static-sources/2-srt.md), [read](../5-read/02-srt.md)): a streaming protocol developed for robustness and precise timing for the enterprise broadcasting industry. _MediaMTX_ listens for incoming clients on port `8890/UDP` and is capable of pulling streams from other servers.
+- SRT ([publish](../3-publish/02-srt.md), [static source](../4-static-sources/02-srt.md), [read](../5-read/02-srt.md)): a streaming protocol developed for robustness and precise timing for the enterprise broadcasting industry. _MediaMTX_ listens for incoming clients on port `8890/UDP` and is capable of pulling streams from other servers.
 
-- HLS ([static source](../4-static-sources/6-hls.md), [read](../5-read/06-hls.md)): a streaming protocol based on files (segments) served through an HTTP server, suitable for reading streams on websites. _MediaMTX_ listens for incoming clients on port `8888/TCP`.
+- HLS ([static source](../4-static-sources/06-hls.md), [read](../5-read/06-hls.md)): a streaming protocol based on files (segments) served through an HTTP server, suitable for reading streams on websites. _MediaMTX_ listens for incoming clients on port `8888/TCP`.
 
-- MPEG-TS ([static source](../4-static-sources/7-mpeg-ts.md)): a packet format used for TV broadcasting. _MediaMTX_ is capable of pulling MPEG-TS packets from an IP address.
+- MPEG-TS ([static source](../4-static-sources/07-mpeg-ts.md)): a packet format used for TV broadcasting. _MediaMTX_ is capable of pulling MPEG-TS packets from an IP address.
 
-- RTP ([static source](../4-static-sources/8-rtp.md)): a packet format used for IP streaming. _MediaMTX_ is capable of pulling RTP streams from an IP address.
+- RTP ([static source](../4-static-sources/08-rtp.md)): a packet format used for IP streaming. _MediaMTX_ is capable of pulling RTP streams from an IP address.
+
+A path can also reuse the stream of another path of the same instance, without any network connection or re-encoding, in order to expose the same media through paths with different access permissions:
+
+- [Internal path source](../4-static-sources/10-internal.md)
 
 We also provide instructions for ingesting streams from some devices:
 
-- [Raspberry Pi Cameras](../4-static-sources/9-raspberry-pi-cameras.md)
+- [Raspberry Pi Cameras](../4-static-sources/09-raspberry-pi-cameras.md)
 - [Generic webcams](../3-publish/06-generic-webcams.md)
 
 We also provide instructions for publishing streams with specific software:

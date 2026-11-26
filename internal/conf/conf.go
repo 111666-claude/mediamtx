@@ -1032,6 +1032,11 @@ func (conf *Conf) validate(l logger.Writer) error {
 		}
 	}
 
+	err := checkInternalSourceCycles(conf.Paths)
+	if err != nil {
+		return err
+	}
+
 	// Authentication
 	// (moved after Path.validate since it can change AuthInternalUsersComputed)
 

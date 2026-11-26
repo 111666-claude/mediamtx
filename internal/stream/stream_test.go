@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
@@ -1044,4 +1045,37 @@ func TestStreamAlwaysAvailableConcurrentReaders(t *testing.T) {
 
 	close(done)
 	readersWG.Wait()
+}
+
+func TestStreamTerminated(t *testing.T) {
+	desc := &description.Session{Medias: []*description.Media{
+		{
+			Type:    description.MediaTypeVideo,
+			Formats: []format.Format{&format.H264{PacketizationMode: 1}},
+		},
+	}}
+
+	strm := &Stream{
+		OrigDesc:          desc,
+		WriteQueueSize:    512,
+		RTPMaxPayloadSize: 1450,
+	}
+	require.NoError(t, strm.Initialize())
+
+	// Terminated is not closed while the stream is open
+	select {
+	case <-strm.Terminated():
+		t.Fatal("Terminated should not be closed before Close")
+	default:
+	}
+
+	strm.Close()
+
+	// Terminated is closed after Close, allowing internal readers to detect
+	// that the source stream is gone
+	select {
+	case <-strm.Terminated():
+	case <-time.After(time.Second):
+		t.Fatal("Terminated not closed after Close")
+	}
 }

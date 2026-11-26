@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/url"
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -596,6 +598,22 @@ func (pconf *Path) validate(
 			return err
 		}
 
+	case IsInternalSource(pconf.Source):
+		targetName := InternalSourcePath(pconf.Source)
+
+		err := IsValidPathName(targetName)
+		if err != nil {
+			return fmt.Errorf("invalid internal source path '%s': %w", targetName, err)
+		}
+
+		if pconf.Regexp != nil {
+			return fmt.Errorf("an internal path source can only be used in a path without a regular expression")
+		}
+
+		if targetName == name {
+			return fmt.Errorf("path '%s' can't use itself as internal source", name)
+		}
+
 	case pconf.Source == "redirect":
 		if pconf.SourceRedirect == "" {
 			return fmt.Errorf("source redirect must be filled")
@@ -1014,6 +1032,19 @@ func (pconf *Path) Equal(other *Path) bool {
 	return reflect.DeepEqual(pconf, other)
 }
 
+// internalSourcePrefix is the prefix of an internal path source.
+const internalSourcePrefix = "internal://"
+
+// IsInternalSource checks whether the given source is an internal path source.
+func IsInternalSource(source string) bool {
+	return strings.HasPrefix(source, internalSourcePrefix)
+}
+
+// InternalSourcePath returns the path name targeted by an internal path source.
+func InternalSourcePath(source string) string {
+	return source[len(internalSourcePrefix):]
+}
+
 // HasStaticSource checks whether the path has a static source.
 func (pconf Path) HasStaticSource() bool {
 	return pconf.Source != "publisher" && pconf.Source != "redirect"
@@ -1027,4 +1058,53 @@ func (pconf Path) HasOnDemandStaticSource() bool {
 // HasOnDemandPublisher checks whether the path has a on-demand publisher.
 func (pconf Path) HasOnDemandPublisher() bool {
 	return pconf.RunOnDemand != ""
+}
+
+// checkInternalSourceCycles verifies that the graph of internal path sources
+// contains neither self references nor cycles.
+func checkInternalSourceCycles(paths map[string]*Path) error {
+	// state: 0 = unvisited, 1 = in progress, 2 = done
+	state := make(map[string]int, len(paths))
+
+	var visit func(name string, chain []string) error
+	visit = func(name string, chain []string) error {
+		switch state[name] {
+		case 1:
+			cycleStart := slices.Index(chain, name)
+			cycle := append(append([]string{}, chain[cycleStart:]...), name)
+			return fmt.Errorf("internal source cycle detected: %s", strings.Join(cycle, " -> "))
+
+		case 2:
+			return nil
+		}
+
+		state[name] = 1
+		chain = append(chain, name)
+
+		pconf, ok := paths[name]
+		if ok && IsInternalSource(pconf.Source) {
+			targetName := InternalSourcePath(pconf.Source)
+
+			if targetName == name {
+				return fmt.Errorf("path '%s' can't use itself as internal source", name)
+			}
+
+			err := visit(targetName, chain)
+			if err != nil {
+				return err
+			}
+		}
+
+		state[name] = 2
+		return nil
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(paths)) {
+		err := visit(name, nil)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

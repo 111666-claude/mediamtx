@@ -146,6 +146,7 @@ components:
       type: string
       enum:
         - hlsSource
+        - internalSource
         - redirect
         - rpiCameraSource
         - rtmpConn

@@ -312,6 +312,7 @@ type Stream struct {
 	lastSystemTime    time.Time
 
 	hasReaders chan struct{}
+	terminated chan struct{}
 }
 
 // Initialize initializes a Stream.
@@ -336,6 +337,7 @@ func (s *Stream) Initialize() error {
 	s.medias = make(map[*description.Media]*streamMedia)
 	s.readers = make(map[*Reader]struct{})
 	s.hasReaders = make(chan struct{})
+	s.terminated = make(chan struct{})
 
 	s.inboundFramesInError = &errordumper.Dumper{
 		OnReport: func(val uint64, last error) {
@@ -390,6 +392,8 @@ func (s *Stream) Initialize() error {
 
 // Close closes all resources of the stream.
 func (s *Stream) Close() {
+	close(s.terminated)
+
 	if s.offlineSubStream != nil {
 		s.offlineSubStream.close(false)
 	}
@@ -549,6 +553,11 @@ func (s *Stream) RemoveReader(r *Reader) {
 // WaitForReaders waits for the stream to have at least one reader.
 func (s *Stream) WaitForReaders() {
 	<-s.hasReaders
+}
+
+// Terminated returns a channel that is closed when the stream is closed.
+func (s *Stream) Terminated() <-chan struct{} {
+	return s.terminated
 }
 
 // OutDescCopy returns a copy of the output description.

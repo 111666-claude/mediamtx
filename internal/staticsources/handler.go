@@ -14,6 +14,7 @@ import (
 	"github.com/bluenviron/mediamtx/internal/defs"
 	"github.com/bluenviron/mediamtx/internal/logger"
 	sshls "github.com/bluenviron/mediamtx/internal/staticsources/hls"
+	ssinternal "github.com/bluenviron/mediamtx/internal/staticsources/internal"
 	ssmoq "github.com/bluenviron/mediamtx/internal/staticsources/moq"
 	ssmpegts "github.com/bluenviron/mediamtx/internal/staticsources/mpegts"
 	ssrpicamera "github.com/bluenviron/mediamtx/internal/staticsources/rpicamera"
@@ -184,6 +185,12 @@ func (s *Handler) Initialize() {
 			ReadTimeout:       s.ReadTimeout,
 			UDPReadBufferSize: s.UDPReadBufferSize,
 			Parent:            s,
+		}
+
+	case conf.IsInternalSource(s.Conf.Source):
+		s.instance = &ssinternal.Source{
+			PathManager: s.PathManager,
+			Parent:      s,
 		}
 
 	case s.Conf.Source == "rpiCamera":

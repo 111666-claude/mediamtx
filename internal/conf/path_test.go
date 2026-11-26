@@ -129,3 +129,80 @@ func (w *warningCounter) Log(level logger.Level, format string, args ...any) {
 		w.last = fmt.Sprintf(format, args...)
 	}
 }
+
+func TestInternalSource(t *testing.T) {
+	for _, ca := range []struct {
+		name string
+		yml  string
+		err  string
+	}{
+		{
+			name: "valid",
+			yml: "paths:\n" +
+				"  source:\n" +
+				"  target:\n" +
+				"    source: internal://source\n",
+		},
+		{
+			name: "valid chain",
+			yml: "paths:\n" +
+				"  source:\n" +
+				"  middle:\n" +
+				"    source: internal://source\n" +
+				"  target:\n" +
+				"    source: internal://middle\n",
+		},
+		{
+			name: "invalid path name",
+			yml: "paths:\n" +
+				"  target:\n" +
+				"    source: internal://bad path\n",
+			err: "invalid internal source path 'bad path': can contain only alphanumeric characters, underscore, dot, minus, slash",
+		},
+		{
+			name: "self reference",
+			yml: "paths:\n" +
+				"  target:\n" +
+				"    source: internal://target\n",
+			err: "path 'target' can't use itself as internal source",
+		},
+		{
+			name: "two node cycle",
+			yml: "paths:\n" +
+				"  a:\n" +
+				"    source: internal://b\n" +
+				"  b:\n" +
+				"    source: internal://a\n",
+			err: "internal source cycle detected: a -> b -> a",
+		},
+		{
+			name: "three node cycle",
+			yml: "paths:\n" +
+				"  a:\n" +
+				"    source: internal://b\n" +
+				"  b:\n" +
+				"    source: internal://c\n" +
+				"  c:\n" +
+				"    source: internal://a\n",
+			err: "internal source cycle detected: a -> b -> c -> a",
+		},
+		{
+			name: "regexp path",
+			yml: "paths:\n" +
+				"  '~^(.*)$':\n" +
+				"    source: internal://source\n" +
+				"    sourceOnDemand: yes\n",
+			err: "an internal path source can only be used in a path without a regular expression",
+		},
+	} {
+		t.Run(ca.name, func(t *testing.T) {
+			tmpf := createTempFile(t, []byte(ca.yml))
+			_, _, err := Load(tmpf, nil, nil)
+			if ca.err != "" {
+				require.EqualError(t, err, ca.err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
