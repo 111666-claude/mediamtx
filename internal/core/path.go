@@ -109,6 +109,7 @@ type path struct {
 	readTimeout       conf.Duration
 	writeTimeout      conf.Duration
 	writeQueueSize    int
+	alignStart        bool
 	udpReadBufferSize uint
 	udpMaxPayloadSize int
 	rtpMaxPayloadSize int
@@ -944,6 +945,7 @@ func (pa *path) setAvailable(
 		AlwaysAvailableFile:   pa.conf.AlwaysAvailableFile,
 		WriteQueueSize:        pa.writeQueueSize,
 		RTPMaxPayloadSize:     pa.rtpMaxPayloadSize,
+		AlignStart:            pa.alignStart,
 		ReplaceNTP:            replaceNTP,
 		Parent:                pa,
 	}

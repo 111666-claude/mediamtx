@@ -169,10 +169,22 @@ func (ssf *subStreamFormat) writeUnitInner(u *unit.Unit) error {
 		csr := sr
 		cOnData := onData
 		sr.push(func() error {
-			if !csr.SkipOutboundBytes {
-				ssf.streamFormat.outboundBytes.Add(size)
+			units := []*unit.Unit{u}
+
+			if csr.aligner != nil {
+				units = csr.aligner.process(ssf.streamFormat.origFormat, u)
 			}
-			return cOnData(u)
+
+			for _, cu := range units {
+				if !csr.SkipOutboundBytes {
+					ssf.streamFormat.outboundBytes.Add(size)
+				}
+				err := cOnData(cu)
+				if err != nil {
+					return err
+				}
+			}
+			return nil
 		})
 	}
 

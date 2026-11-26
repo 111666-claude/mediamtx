@@ -286,6 +286,7 @@ type Stream struct {
 	AlwaysAvailableFile   string
 	WriteQueueSize        int
 	RTPMaxPayloadSize     int
+	AlignStart            bool
 	ReplaceNTP            bool
 	Parent                logger.Writer
 
@@ -500,6 +501,7 @@ func (s *Stream) RTSPSStream(server *gortsplib.Server) (*gortsplib.ServerStream,
 // Used by all protocols except RTSP.
 func (s *Stream) AddReader(r *Reader) {
 	r.queueSize = s.WriteQueueSize
+	r.alignStart = s.AlignStart
 	r.start()
 
 	s.mutex.Lock()

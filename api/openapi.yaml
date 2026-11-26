@@ -315,6 +315,8 @@ components:
     GlobalConf:
       type: object
       properties:
+        alignStart:
+          type: boolean
         api:
           type: boolean
           description: Control API

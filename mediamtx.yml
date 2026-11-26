@@ -26,6 +26,13 @@ writeTimeout: 10s
 # Size of the queue of outgoing packets.
 # A higher value allows to increase throughput, a lower value allows to save RAM.
 writeQueueSize: 512
+# Align the start of audio and video of new readers.
+# When enabled, audio is buffered until the first decodable video keyframe is
+# received, so readers of streams with a long GOP do not receive seconds of
+# audio before the first video frame.
+# This has no effect on audio-only streams and adds a small start delay equal
+# to the time needed to receive the next keyframe.
+alignStart: false
 # Maximum size of outgoing UDP payloads.
 # It defaults to the maximum packet size on ethernet (1500) minus IPv6 and UDP headers (48).
 # This can be decreased to avoid fragmentation on networks with a low MTU.

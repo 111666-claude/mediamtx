@@ -22,7 +22,9 @@ type Reader struct {
 
 	onDatas                 map[*description.Media]map[format.Format]OnDataFunc
 	queueSize               int
+	alignStart              bool
 	buffer                  *ringbuffer.RingBuffer
+	aligner                 *startAligner
 	outboundFramesDiscarded *counterdumper.Dumper
 
 	// out
@@ -96,6 +98,15 @@ func (r *Reader) start() {
 	}
 	r.outboundFramesDiscarded.Start()
 
+	if r.alignStart {
+		r.aligner = newStartAligner(r.onDatas, func(total uint64) {
+			if r.Parent != nil {
+				r.Parent.Log(logger.Warn,
+					"waiting for first video keyframe, discarded %d audio units due to buffer limit", total)
+			}
+		})
+	}
+
 	go r.run()
 }
 
@@ -103,6 +114,11 @@ func (r *Reader) stop() {
 	r.buffer.Close()
 	r.outboundFramesDiscarded.Stop()
 	<-r.err //nolint:errcheck
+
+	if r.aligner != nil {
+		// release audio units buffered while waiting for the first keyframe
+		r.aligner.reset()
+	}
 }
 
 func (r *Reader) run() {

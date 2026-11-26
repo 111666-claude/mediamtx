@@ -724,6 +724,7 @@ func (p *Core) createResources(initial bool) error {
 			readTimeout:       p.conf.ReadTimeout,
 			writeTimeout:      p.conf.WriteTimeout,
 			writeQueueSize:    p.conf.WriteQueueSize,
+			alignStart:        p.conf.AlignStart,
 			udpReadBufferSize: p.conf.UDPReadBufferSize,
 			udpMaxPayloadSize: p.conf.UDPMaxPayloadSize,
 			rtpMaxPayloadSize: rtpMaxPayloadSize,
@@ -1136,6 +1137,7 @@ func (p *Core) closeResources(newConf *conf.Conf) error {
 		newConf.ReadTimeout != p.conf.ReadTimeout ||
 		newConf.WriteTimeout != p.conf.WriteTimeout ||
 		newConf.WriteQueueSize != p.conf.WriteQueueSize ||
+		newConf.AlignStart != p.conf.AlignStart ||
 		newConf.UDPReadBufferSize != p.conf.UDPReadBufferSize ||
 		newConf.UDPMaxPayloadSize != p.conf.UDPMaxPayloadSize ||
 		newConf.RTSPEncryption != p.conf.RTSPEncryption ||

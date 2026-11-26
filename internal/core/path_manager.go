@@ -80,6 +80,7 @@ type pathManager struct {
 	readTimeout       conf.Duration
 	writeTimeout      conf.Duration
 	writeQueueSize    int
+	alignStart        bool
 	udpReadBufferSize uint
 	udpMaxPayloadSize int
 	rtpMaxPayloadSize int
@@ -517,6 +518,7 @@ func (pm *pathManager) createPath(
 		readTimeout:       pm.readTimeout,
 		writeTimeout:      pm.writeTimeout,
 		writeQueueSize:    pm.writeQueueSize,
+		alignStart:        pm.alignStart,
 		udpReadBufferSize: pm.udpReadBufferSize,
 		udpMaxPayloadSize: pm.udpMaxPayloadSize,
 		rtpMaxPayloadSize: pm.rtpMaxPayloadSize,

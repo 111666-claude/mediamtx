@@ -262,6 +262,7 @@ type Conf struct {
 	WriteTimeout        Duration        `json:"writeTimeout"`
 	ReadBufferCount     *int            `json:"readBufferCount,omitempty" deprecated:"true"`
 	WriteQueueSize      int             `json:"writeQueueSize"`
+	AlignStart          bool            `json:"alignStart"`
 	UDPMaxPayloadSize   int             `json:"udpMaxPayloadSize"`
 	UDPReadBufferSize   uint            `json:"udpReadBufferSize"`
 	RunOnConnect        string          `json:"runOnConnect"`
